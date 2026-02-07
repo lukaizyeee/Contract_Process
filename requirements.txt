@@ -1,0 +1,6 @@
+flet
+sentence-transformers
+numpy
+python-docx
+ollama  # python 库封装
+pyinstaller
