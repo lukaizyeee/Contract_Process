@@ -33,30 +33,34 @@ class SemanticSearchEngine:
         embedding_path = os.path.join(self.models_dir, "bge-m3")
         print(f"Checking/Downloading {self.embedding_model_name} to {embedding_path}...")
         try:
-            snapshot_download(repo_id=self.embedding_model_name, local_dir=embedding_path, ignore_patterns=["*.DS_Store"], resume_download=True)
+            snapshot_download(repo_id=self.embedding_model_name, local_dir=embedding_path, ignore_patterns=["*.DS_Store"])
         except Exception as e:
             print(f"Warning: Failed to download/check embedding model: {e}")
             print("Trying to load from local path anyway...")
             
+        print("Initializing SentenceTransformer...")
         self.embedder = SentenceTransformer(
             embedding_path, 
             device=self.device
         )
+        print("SentenceTransformer initialized.")
         
         print(f"Loading Reranker Model: {self.reranker_model_name} on {self.device}...")
         
         reranker_path = os.path.join(self.models_dir, "bge-reranker-large")
         print(f"Checking/Downloading {self.reranker_model_name} to {reranker_path}...")
         try:
-            snapshot_download(repo_id=self.reranker_model_name, local_dir=reranker_path, ignore_patterns=["*.DS_Store"], resume_download=True)
+            snapshot_download(repo_id=self.reranker_model_name, local_dir=reranker_path, ignore_patterns=["*.DS_Store"])
         except Exception as e:
             print(f"Warning: Failed to download/check reranker model: {e}")
             print("Trying to load from local path anyway...")
              
+        print("Initializing CrossEncoder...")
         self.reranker = CrossEncoder(
             reranker_path, 
             device=self.device
         )
+        print("CrossEncoder initialized.")
         
         self.chunks: List[Chunk] = []
         self.doc_vectors = None
