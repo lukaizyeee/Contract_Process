@@ -51,10 +51,18 @@ class SemanticSearchEngine:
         self._ensure_model_downloaded(self.embedding_model_name, embedding_path)
             
         print("Initializing SentenceTransformer...")
-        self.embedder = SentenceTransformer(
-            embedding_path, 
-            device=self.device
-        )
+        # Force CPU loading first if CUDA is problematic during init
+        try:
+            self.embedder = SentenceTransformer(
+                embedding_path, 
+                device="cpu"
+            )
+            if self.device == "cuda":
+                print("Moving Embedding Model to CUDA...")
+                self.embedder = self.embedder.to("cuda")
+        except Exception as e:
+            print(f"Error loading embedding model: {e}")
+            raise e
         print("SentenceTransformer initialized.")
         
         # --- Reranker Model ---
@@ -63,10 +71,17 @@ class SemanticSearchEngine:
         self._ensure_model_downloaded(self.reranker_model_name, reranker_path)
              
         print("Initializing CrossEncoder...")
-        self.reranker = CrossEncoder(
-            reranker_path, 
-            device=self.device
-        )
+        try:
+            self.reranker = CrossEncoder(
+                reranker_path, 
+                device="cpu"
+            )
+            if self.device == "cuda":
+                print("Moving Reranker Model to CUDA...")
+                self.reranker.model = self.reranker.model.to("cuda")
+        except Exception as e:
+            print(f"Error loading reranker model: {e}")
+            raise e
         print("CrossEncoder initialized.")
         
         self.chunks: List[Chunk] = []
