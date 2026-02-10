@@ -16,6 +16,24 @@ class SemanticSearchEngine:
             cls._instance._initialized = False
         return cls._instance
 
+    def _ensure_model_downloaded(self, repo_id, local_path):
+        """
+        Check if model exists locally. If not, download it.
+        If it exists (checking for config.json), skip download to avoid network hang.
+        """
+        # Simple check: if config.json exists, assume model is downloaded
+        if os.path.exists(os.path.join(local_path, "config.json")):
+            print(f"Model found locally at {local_path}. Skipping download check.")
+            return
+
+        print(f"Model not found locally. Downloading {repo_id} to {local_path}...")
+        try:
+            snapshot_download(repo_id=repo_id, local_dir=local_path, ignore_patterns=["*.DS_Store"])
+            print(f"Download completed: {repo_id}")
+        except Exception as e:
+            print(f"Error downloading {repo_id}: {e}")
+            # Don't raise, let the loader try to fail naturally if files are missing
+            
     def __init__(self):
         if self._initialized:
             return
@@ -27,16 +45,10 @@ class SemanticSearchEngine:
         self.embedding_model_name = "BAAI/bge-m3"
         self.reranker_model_name = "BAAI/bge-reranker-large"
         
+        # --- Embedding Model ---
         print(f"Loading Embedding Model: {self.embedding_model_name} on {self.device}...")
-        
-        # Download explicitly to a local folder (not cache) to avoid symlinks
         embedding_path = os.path.join(self.models_dir, "bge-m3")
-        print(f"Checking/Downloading {self.embedding_model_name} to {embedding_path}...")
-        try:
-            snapshot_download(repo_id=self.embedding_model_name, local_dir=embedding_path, ignore_patterns=["*.DS_Store"])
-        except Exception as e:
-            print(f"Warning: Failed to download/check embedding model: {e}")
-            print("Trying to load from local path anyway...")
+        self._ensure_model_downloaded(self.embedding_model_name, embedding_path)
             
         print("Initializing SentenceTransformer...")
         self.embedder = SentenceTransformer(
@@ -45,15 +57,10 @@ class SemanticSearchEngine:
         )
         print("SentenceTransformer initialized.")
         
+        # --- Reranker Model ---
         print(f"Loading Reranker Model: {self.reranker_model_name} on {self.device}...")
-        
         reranker_path = os.path.join(self.models_dir, "bge-reranker-large")
-        print(f"Checking/Downloading {self.reranker_model_name} to {reranker_path}...")
-        try:
-            snapshot_download(repo_id=self.reranker_model_name, local_dir=reranker_path, ignore_patterns=["*.DS_Store"])
-        except Exception as e:
-            print(f"Warning: Failed to download/check reranker model: {e}")
-            print("Trying to load from local path anyway...")
+        self._ensure_model_downloaded(self.reranker_model_name, reranker_path)
              
         print("Initializing CrossEncoder...")
         self.reranker = CrossEncoder(
