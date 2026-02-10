@@ -26,16 +26,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Create Test File
+        run: |
+          # Generate the test docx file so the test_core.py can use it
+          python create_test_docx.py
+
       - name: Run Unit Tests
         run: |
-          # 运行测试脚本，确保语义检索内核 (Numpy) 在 Mac 下工作正常
-          # 建议强手开发者写一些简单的测试用例
-          python -m pytest tests/test_core.py
+          # 运行测试脚本
+          python -m pytest tests/test_core.py -v
 
-      - name: Attempt Build (Dry Run)
-        run: |
-          # 尝试在 Mac 下执行打包命令，确保没有路径或权限错误
-          pyinstaller --onefile --noconsole main.py
+      # - name: Attempt Build (Dry Run)
+      #   run: |
+      #     # 尝试在 Mac 下执行打包命令 (暂时注释掉，因为还没写 main.py)
+      #     # pyinstaller --onefile --noconsole main.py
 
   test-on-windows:
     runs-on: windows-latest
@@ -55,10 +59,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Create Test File
+        run: |
+          python create_test_docx.py
+
       - name: Run Unit Tests
         run: |
-          python -m pytest tests/test_core.py
+          python -m pytest tests/test_core.py -v
 
-      - name: Attempt Build (Dry Run)
-        run: |
-          pyinstaller --onefile --noconsole main.py
+      # - name: Attempt Build (Dry Run)
+      #   run: |
+      #     pyinstaller --onefile --noconsole main.py

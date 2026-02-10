@@ -1,6 +1,8 @@
-flet
-sentence-transformers
-numpy
 python-docx
-ollama  # python 库封装
-pyinstaller
+numpy
+sentence-transformers
+torch
+huggingface_hub
+pytest
+pyqt5
+mammoth
