@@ -32,7 +32,11 @@ class SemanticSearchEngine:
         # Download explicitly to a local folder (not cache) to avoid symlinks
         embedding_path = os.path.join(self.models_dir, "bge-m3")
         print(f"Checking/Downloading {self.embedding_model_name} to {embedding_path}...")
-        snapshot_download(repo_id=self.embedding_model_name, local_dir=embedding_path, ignore_patterns=["*.DS_Store"])
+        try:
+            snapshot_download(repo_id=self.embedding_model_name, local_dir=embedding_path, ignore_patterns=["*.DS_Store"], resume_download=True)
+        except Exception as e:
+            print(f"Warning: Failed to download/check embedding model: {e}")
+            print("Trying to load from local path anyway...")
             
         self.embedder = SentenceTransformer(
             embedding_path, 
@@ -43,7 +47,11 @@ class SemanticSearchEngine:
         
         reranker_path = os.path.join(self.models_dir, "bge-reranker-large")
         print(f"Checking/Downloading {self.reranker_model_name} to {reranker_path}...")
-        snapshot_download(repo_id=self.reranker_model_name, local_dir=reranker_path, ignore_patterns=["*.DS_Store"])
+        try:
+            snapshot_download(repo_id=self.reranker_model_name, local_dir=reranker_path, ignore_patterns=["*.DS_Store"], resume_download=True)
+        except Exception as e:
+            print(f"Warning: Failed to download/check reranker model: {e}")
+            print("Trying to load from local path anyway...")
              
         self.reranker = CrossEncoder(
             reranker_path, 
