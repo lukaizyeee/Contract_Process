@@ -11,7 +11,7 @@ from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
 # 确保能导入 core 模块
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
 from docx import Document
-from api_interface import init_engine, process_file, search_query
+from api_interface import init_engine, process_file, search_query, get_document_preview
 
 # --- 工作线程 ---
 class WorkerThread(QThread):
@@ -34,6 +34,9 @@ class WorkerThread(QThread):
             elif self.task_type == "search":
                 results = search_query(self.kwargs['query'])
                 self.finished.emit(results)
+            elif self.task_type == "preview":
+                html = get_document_preview(self.kwargs['file_path'])
+                self.finished.emit(html)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -106,7 +109,7 @@ class MainWindow(QMainWindow):
         
         # 标题栏
         left_header = QHBoxLayout()
-        left_title = QLabel("📄 原文预览")
+        left_title = QLabel("📄 原文预览 (修订模式)")
         left_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         left_title.setStyleSheet("color: #007AFF; border: none;")
         left_layout.addLayout(left_header)
@@ -236,33 +239,21 @@ class MainWindow(QMainWindow):
         self.doc_view.clear()
         self.upload_btn.setEnabled(False)
 
-        # 预览原文
-        try:
-            with open(file_path, "rb") as docx_file:
-                result = mammoth.convert_to_html(docx_file)
-                html = result.value
-                # 添加简单的 CSS 样式以优化显示
-                styled_html = f"""
-                <style>
-                    body {{ font-family: 'Segoe UI', sans-serif; line-height: 1.8; color: #333; font-size: 16px; }}
-                    h1, h2, h3 {{ color: #2c3e50; }}
-                    table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                    th {{ background-color: #f2f2f2; }}
-                    p {{ margin-bottom: 10px; }}
-                    .highlight {{ background-color: #FFF200; color: black; font-weight: bold; padding: 2px 0; }}
-                </style>
-                {html}
-                """
-                self.doc_view.setHtml(styled_html)
-        except Exception as e:
-            self.doc_view.setText(f"预览失败: {e}")
+        # 1. 启动预览生成线程
+        self.preview_thread = WorkerThread("preview", file_path=file_path)
+        self.preview_thread.finished.connect(self.on_preview_finished)
+        self.preview_thread.error.connect(lambda e: self.doc_view.setText(f"预览失败: {e}"))
+        self.preview_thread.start()
 
-        # 后端处理
+        # 2. 启动后端处理线程
         self.process_thread = WorkerThread("process", file_path=file_path)
         self.process_thread.finished.connect(self.on_process_finished)
         self.process_thread.error.connect(self.on_error)
         self.process_thread.start()
+
+    def on_preview_finished(self, html_content):
+        # 设置 HTML 到 QTextEdit
+        self.doc_view.setHtml(html_content)
 
     def update_status(self, text):
         self.status_label.setText(text)
@@ -304,23 +295,13 @@ class MainWindow(QMainWindow):
     def highlight_text(self, text):
         if not text: return
         
-        # 1. 移除旧的高亮 (通过重新加载 HTML，这里简化处理，直接在当前 HTML 上操作可能较难完全清除，
-        # 但 PyQt QTextEdit 的 find 功能可以直接高亮选区)
-        
         # 使用 QTextEdit 的光标操作进行高亮
         cursor = self.doc_view.textCursor()
         cursor.clearSelection()
         
-        # 清除之前的高亮 (重置整个文档的背景色不太可行，通常重新加载文档或只高亮当前)
-        # 简单策略：先尝试查找并高亮
-        
         # 移动光标到开始
         cursor.movePosition(cursor.Start)
         self.doc_view.setTextCursor(cursor)
-        
-        # 查找文本 (模糊匹配比较难，这里尝试精确匹配片段，或者取前20个字符搜索)
-        # 由于 mammoth 转换后的 HTML 可能包含标签，直接搜索纯文本可能失败。
-        # 更好的方法是：后端返回的 text 是纯文本，我们尝试在 doc_view 中搜索它。
         
         # 尝试搜索前 50 个字符（因为长文本可能跨标签）
         search_snippet = text[:50]

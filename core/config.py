@@ -21,13 +21,19 @@ class Config:
         Windows: cuda (if available) else cpu
         Fallback: cpu
         """
+        print(f"Detecting device for OS: {self.os_type}")
         if self.os_type == "Darwin":
             if torch.backends.mps.is_available():
+                print("MPS acceleration available.")
                 return "mps"
         elif self.os_type == "Windows":
             if torch.cuda.is_available():
+                print(f"CUDA available. Device: {torch.cuda.get_device_name(0)}")
                 return "cuda"
+            else:
+                print("CUDA not available.")
         
+        print("Using CPU fallback.")
         return "cpu"
 
     def _setup_env(self):
