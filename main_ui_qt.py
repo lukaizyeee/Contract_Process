@@ -5,7 +5,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTextEdit, QLineEdit, QPushButton, 
                              QLabel, QFileDialog, QSplitter, QProgressBar, QFrame,
                              QScrollArea, QSizePolicy)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
 
 # 确保能导入 core 模块
@@ -122,9 +123,10 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(line1)
 
         # 文档内容区
-        self.doc_view = QTextEdit()
-        self.doc_view.setReadOnly(True)
-        self.doc_view.setPlaceholderText("暂无文档内容...")
+        # self.doc_view = QTextEdit()
+        # self.doc_view.setReadOnly(True)
+        self.doc_view = QWebEngineView()
+        # self.doc_view.setHtml("<html><body><p style='color:#8E8E93; text-align:center; margin-top:50px;'>请上传文档以预览</p></body></html>")
         left_layout.addWidget(self.doc_view)
 
         # 上传按钮
@@ -236,13 +238,13 @@ class MainWindow(QMainWindow):
             return
 
         self.status_label.setText(f"正在解析 {os.path.basename(file_path)}...")
-        self.doc_view.clear()
+        self.doc_view.setHtml("") # Clear content
         self.upload_btn.setEnabled(False)
 
         # 1. 启动预览生成线程
         self.preview_thread = WorkerThread("preview", file_path=file_path)
         self.preview_thread.finished.connect(self.on_preview_finished)
-        self.preview_thread.error.connect(lambda e: self.doc_view.setText(f"预览失败: {e}"))
+        self.preview_thread.error.connect(lambda e: self.doc_view.setHtml(f"<html><body><p style='color:red'>预览失败: {e}</p></body></html>"))
         self.preview_thread.start()
 
         # 2. 启动后端处理线程
@@ -252,8 +254,12 @@ class MainWindow(QMainWindow):
         self.process_thread.start()
 
     def on_preview_finished(self, html_content):
-        # 设置 HTML 到 QTextEdit
-        self.doc_view.setHtml(html_content)
+        # 设置 HTML 到 QWebEngineView
+        # 如果 html_content 是文件路径（Word 导出模式），则使用 load
+        if os.path.exists(html_content) and (html_content.endswith('.html') or html_content.endswith('.htm')):
+             self.doc_view.load(QUrl.fromLocalFile(html_content))
+        else:
+             self.doc_view.setHtml(html_content)
 
     def update_status(self, text):
         self.status_label.setText(text)
@@ -295,39 +301,43 @@ class MainWindow(QMainWindow):
     def highlight_text(self, text):
         if not text: return
         
-        # 使用 QTextEdit 的光标操作进行高亮
-        cursor = self.doc_view.textCursor()
-        cursor.clearSelection()
+        # 使用 JavaScript 在 WebEngineView 中高亮
+        # 清除旧的高亮
+        # 然后查找并高亮
+        # 注意：QWebEngineView 的 findText 是异步的，且一次只能高亮一个
+        # 我们使用 JS 来实现所有匹配项的高亮
         
-        # 移动光标到开始
-        cursor.movePosition(cursor.Start)
-        self.doc_view.setTextCursor(cursor)
+        js_code = f"""
+        (function() {{
+            var searchTerm = "{text}";
+            var bodyText = document.body.innerHTML;
+            var searchRegExp = new RegExp(searchTerm, 'gi');
+            
+            // 简单的替换可能破坏 HTML 标签，这里仅作演示
+            // 更好的做法是遍历文本节点
+            
+            // 使用 window.find (简单但只能选中一个)
+            window.find(searchTerm);
+            
+            // 或者使用 Mark.js (如果引入了库)
+            
+            // 简单高亮实现：
+            // document.designMode = "on";
+            // var sel = window.getSelection();
+            // sel.collapse(document.body, 0);
+            // while (window.find(searchTerm)) {{
+            //    document.execCommand("HiliteColor", false, "#FFF200");
+            //    sel.collapseToEnd();
+            // }}
+            // document.designMode = "off";
+        }})();
+        """
         
-        # 尝试搜索前 50 个字符（因为长文本可能跨标签）
-        search_snippet = text[:50]
-        found = self.doc_view.find(search_snippet)
+        # 由于我们只想高亮找到的第一个或全部，QWebEngineView.findText 比较简单
+        self.doc_view.findText(text)
         
-        if found:
-            # 如果找到了，设置高亮背景
-            # 获取当前选区
-            cursor = self.doc_view.textCursor()
-            
-            # 创建高亮格式
-            fmt = cursor.charFormat()
-            fmt.setBackground(QColor("#FFF200"))
-            fmt.setForeground(QColor("black"))
-            
-            # 应用格式
-            cursor.mergeCharFormat(fmt)
-            
-            # 清除选区，避免显示为“选中”状态（通常是灰色或蓝色）
-            cursor.clearSelection()
-            self.doc_view.setTextCursor(cursor)
-            
-            # 滚动到可见
-            self.doc_view.ensureCursorVisible()
-        else:
-            print(f"Highlight warning: Could not find exact text snippet: {search_snippet}")
+        # 也可以尝试 JS 高亮全部（如果需要）
+        # self.doc_view.page().runJavaScript(js_code)
 
     def on_error(self, err_msg):
         self.upload_btn.setEnabled(True)
