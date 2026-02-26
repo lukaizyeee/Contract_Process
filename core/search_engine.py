@@ -1,10 +1,12 @@
 import torch
 import numpy as np
 import os
-from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 from .config import config  # Import config first to set env vars
 from sentence_transformers import SentenceTransformer, CrossEncoder, util
-from huggingface_hub import snapshot_download
+from huggingface_hub import HfApi, hf_hub_download
 from .ingestion import Chunk
 
 class SemanticSearchEngine:
@@ -16,23 +18,172 @@ class SemanticSearchEngine:
             cls._instance._initialized = False
         return cls._instance
 
-    def _ensure_model_downloaded(self, repo_id, local_path):
-        """
-        Check if model exists locally. If not, download it.
-        If it exists (checking for config.json), skip download to avoid network hang.
-        """
-        # Simple check: if config.json exists, assume model is downloaded
-        if os.path.exists(os.path.join(local_path, "config.json")):
-            print(f"Model found locally at {local_path}. Skipping download check.")
-            return
+    def _fetch_remote_file_list(self, repo_id: str) -> List[Tuple[str, Optional[int]]]:
+        api = HfApi()
+        model_info = api.model_info(repo_id)
+        siblings = model_info.siblings or []
+        return [
+            (sibling.rfilename, getattr(sibling, "size", None))
+            for sibling in siblings
+            if sibling.rfilename and not sibling.rfilename.endswith(".DS_Store")
+        ]
 
-        print(f"Model not found locally. Downloading {repo_id} to {local_path}...")
+    def _is_model_complete_offline(self, local_model_dir: Path) -> bool:
+        if not (local_model_dir / "config.json").exists():
+            return False
+
+        has_weight = any(
+            (local_model_dir / candidate).exists()
+            for candidate in [
+                "pytorch_model.bin",
+                "model.safetensors",
+                "model.bin",
+                "model.onnx",
+                "onnx/model.onnx",
+            ]
+        )
+        has_tokenizer = any(
+            (local_model_dir / candidate).exists()
+            for candidate in [
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.txt",
+                "sentencepiece.bpe.model",
+                "spiece.model",
+            ]
+        )
+
+        return has_weight and has_tokenizer
+
+    def _collect_missing_files(
+        self,
+        local_model_dir: Path,
+        files: List[Tuple[str, Optional[int]]],
+    ) -> Tuple[List[str], List[str], List[str]]:
+        missing_files: List[str] = []
+        size_mismatch_files: List[str] = []
+        unknown_size_files: List[str] = []
+
+        for relative_path, remote_size in files:
+            local_file = local_model_dir / relative_path
+
+            if not local_file.exists():
+                missing_files.append(relative_path)
+                continue
+
+            if remote_size is None:
+                unknown_size_files.append(relative_path)
+                continue
+
+            try:
+                local_size = local_file.stat().st_size
+            except OSError:
+                missing_files.append(relative_path)
+                continue
+
+            if local_size != remote_size:
+                size_mismatch_files.append(relative_path)
+
+        to_download = missing_files + size_mismatch_files
+        return to_download, missing_files, size_mismatch_files
+
+    def _ensure_model_downloaded(self, repo_id: str, local_path: str):
+        """
+        Ensure model is fully downloaded.
+        Preferred check: compare against remote file list.
+        Fallback check: local critical files heuristic when remote is unavailable.
+        """
+        local_model_dir = Path(local_path)
+        local_model_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"Checking local model completeness: {repo_id} -> {local_model_dir}", flush=True)
+
         try:
-            snapshot_download(repo_id=repo_id, local_dir=local_path, ignore_patterns=["*.DS_Store"])
-            print(f"Download completed: {repo_id}")
+            remote_files = self._fetch_remote_file_list(repo_id)
+            files_to_download, missing_files, size_mismatch_files = self._collect_missing_files(
+                local_model_dir,
+                remote_files,
+            )
+
+            if not files_to_download:
+                print(f"Model is complete locally. Skip download: {repo_id}", flush=True)
+                return
+
+            print(
+                (
+                    f"Local model incomplete: {len(files_to_download)} files need sync "
+                    f"(missing={len(missing_files)}, size_mismatch={len(size_mismatch_files)}, total={len(remote_files)})."
+                ),
+                flush=True,
+            )
+        except Exception as check_error:
+            print(f"Remote completeness check failed for {repo_id}: {check_error}", flush=True)
+            if self._is_model_complete_offline(local_model_dir):
+                print(f"Offline heuristic says model is complete. Skip download: {repo_id}", flush=True)
+                return
+
+            print(f"Offline heuristic says model is incomplete. Re-downloading full snapshot: {repo_id}", flush=True)
+            files_to_download = []
+
+        print(f"Model download required. Downloading {repo_id} to {local_model_dir}...", flush=True)
+
+        try:
+            if not files_to_download:
+                # When remote file listing is unavailable, fallback to full snapshot recovery.
+                from huggingface_hub import snapshot_download
+
+                snapshot_download(repo_id=repo_id, local_dir=str(local_model_dir), ignore_patterns=["*.DS_Store"])
+                print(f"Download completed (snapshot): {repo_id}", flush=True)
+                return
+
+            total_files = len(files_to_download)
+            max_workers = self._resolve_download_workers(total_files)
+            print(f"[{repo_id}] Total files: {total_files}, workers: {max_workers}", flush=True)
+
+            if total_files == 0:
+                print(f"[{repo_id}] No files to download.", flush=True)
+                return
+
+            completed = 0
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_filename = {
+                    executor.submit(
+                        hf_hub_download,
+                        repo_id=repo_id,
+                        filename=filename,
+                        local_dir=str(local_model_dir),
+                    ): filename
+                    for filename in files_to_download
+                }
+
+                for future in as_completed(future_to_filename):
+                    filename = future_to_filename[future]
+                    try:
+                        future.result()
+                        completed += 1
+                        print(f"[{repo_id}] ({completed}/{total_files}) done {filename}", flush=True)
+                    except Exception as thread_error:
+                        print(f"[{repo_id}] failed {filename}: {thread_error}", flush=True)
+                        raise
+
+            print(f"Download completed: {repo_id}", flush=True)
         except Exception as e:
-            print(f"Error downloading {repo_id}: {e}")
-            # Don't raise, let the loader try to fail naturally if files are missing
+            print(f"Error downloading {repo_id}: {e}", flush=True)
+            raise
+
+    @staticmethod
+    def _resolve_download_workers(total_files: int) -> int:
+        env_value = os.getenv("MODEL_DOWNLOAD_WORKERS", "4")
+        try:
+            requested = int(env_value)
+        except ValueError:
+            requested = 4
+
+        requested = max(1, requested)
+        if total_files <= 0:
+            return 1
+
+        return min(requested, total_files, 8)
             
     def __init__(self):
         if self._initialized:
@@ -46,11 +197,11 @@ class SemanticSearchEngine:
         self.reranker_model_name = "BAAI/bge-reranker-large"
         
         # --- Embedding Model ---
-        print(f"Loading Embedding Model: {self.embedding_model_name} on {self.device}...")
+        print(f"Loading Embedding Model: {self.embedding_model_name} on {self.device}...", flush=True)
         embedding_path = os.path.join(self.models_dir, "bge-m3")
         self._ensure_model_downloaded(self.embedding_model_name, embedding_path)
             
-        print("Initializing SentenceTransformer...")
+        print("Initializing SentenceTransformer...", flush=True)
         # Force CPU loading first if CUDA is problematic during init
         try:
             self.embedder = SentenceTransformer(
@@ -58,31 +209,31 @@ class SemanticSearchEngine:
                 device="cpu"
             )
             if self.device == "cuda":
-                print("Moving Embedding Model to CUDA...")
+                print("Moving Embedding Model to CUDA...", flush=True)
                 self.embedder = self.embedder.to("cuda")
         except Exception as e:
-            print(f"Error loading embedding model: {e}")
+            print(f"Error loading embedding model: {e}", flush=True)
             raise e
-        print("SentenceTransformer initialized.")
+        print("SentenceTransformer initialized.", flush=True)
         
         # --- Reranker Model ---
-        print(f"Loading Reranker Model: {self.reranker_model_name} on {self.device}...")
+        print(f"Loading Reranker Model: {self.reranker_model_name} on {self.device}...", flush=True)
         reranker_path = os.path.join(self.models_dir, "bge-reranker-large")
         self._ensure_model_downloaded(self.reranker_model_name, reranker_path)
              
-        print("Initializing CrossEncoder...")
+        print("Initializing CrossEncoder...", flush=True)
         try:
             self.reranker = CrossEncoder(
                 reranker_path, 
                 device="cpu"
             )
             if self.device == "cuda":
-                print("Moving Reranker Model to CUDA...")
+                print("Moving Reranker Model to CUDA...", flush=True)
                 self.reranker.model = self.reranker.model.to("cuda")
         except Exception as e:
-            print(f"Error loading reranker model: {e}")
+            print(f"Error loading reranker model: {e}", flush=True)
             raise e
-        print("CrossEncoder initialized.")
+        print("CrossEncoder initialized.", flush=True)
         
         self.chunks: List[Chunk] = []
         self.doc_vectors = None
@@ -99,7 +250,7 @@ class SemanticSearchEngine:
             self.doc_vectors = None
             return
 
-        print(f"Encoding {len(texts)} chunks...")
+        print(f"Encoding {len(texts)} chunks...", flush=True)
         # encode returns numpy array by default unless convert_to_tensor=True
         # Using convert_to_tensor=True for performance as per plan
         embeddings = self.embedder.encode(
