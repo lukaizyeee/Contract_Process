@@ -1,8 +1,6 @@
 import os
 import html
 import tempfile
-import platform
-import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 from docx import Document
@@ -13,8 +11,7 @@ from docx.oxml.ns import qn
 class DocxPreviewGenerator:
     """
     Generates HTML preview from DOCX. 
-    Attempts to use Microsoft Word for high-fidelity conversion if available.
-    Falls back to internal XML parsing for revision support.
+    Uses internal XML parsing for revision support on all platforms.
     """
     
     STYLE_CSS = """
@@ -69,171 +66,13 @@ class DocxPreviewGenerator:
     def generate_html(self, file_path):
         """
         Main entry point for generating HTML preview.
-        Attempts Word automation on Windows/macOS for high fidelity.
-        Falls back to XML parsing if Word automation fails.
+        Directly uses XML parsing for consistent behavior across all platforms.
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"输入文件不存在: {file_path}")
         
-        sys_platform = platform.system()
-        print(f"[预览生成] 当前平台: {sys_platform}, 文件: {file_path}")
-        
-        if sys_platform == "Windows":
-            try:
-                return self.generate_html_via_word_win(file_path)
-            except Exception as e:
-                print(f"[预览] Word 自动化失败: {e}, 尝试 XML 解析...")
-        elif sys_platform == "Darwin":
-            try:
-                return self.generate_html_via_mammoth(file_path)
-            except Exception as e:
-                print(f"[预览] macOS mammoth 失败: {e}, 尝试 XML 解析...")
-        
-        print(f"[预览] 回退到 XML 解析模式")
+        print(f"[预览生成] 使用内部 XML 解析器处理文件: {file_path}")
         return self.generate_html_from_xml(file_path)
-
-    def generate_html_via_word_win(self, file_path):
-        """
-        Uses Word COM automation to export Filtered HTML (Windows).
-        """
-        import win32com.client
-        import pythoncom
-        import codecs
-        
-        pythoncom.CoInitialize()
-        word = None
-        try:
-            word = win32com.client.DispatchEx("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0 # wdAlertsNone
-            
-            abs_path = os.path.abspath(file_path)
-            print(f"[Word] 打开文档: {abs_path}")
-            doc = word.Documents.Open(abs_path, ReadOnly=True)
-            
-            # Ensure track changes are visible
-            doc.TrackRevisions = True
-            word.ActiveWindow.View.ShowRevisionsAndComments = True
-            word.ActiveWindow.View.RevisionsView = 0 # wdRevisionsViewFinal
-            
-            fd, temp_path = tempfile.mkstemp(suffix=".htm")
-            os.close(fd)
-            
-            # wdFormatHTML = 8 (Standard HTML, better fidelity than Filtered HTML)
-            print(f"[Word] 导出为HTML: {temp_path}")
-            doc.SaveAs2(temp_path, FileFormat=8)
-            doc.Close(False)
-            
-            # 验证文件是否成功创建
-            if not os.path.exists(temp_path):
-                raise IOError(f"HTML 文件未成功创建: {temp_path}")
-            
-            file_size = os.path.getsize(temp_path)
-            print(f"[Word] HTML 文件成功创建，大小: {file_size} 字节")
-            
-            # 重新编码 HTML 文件为 UTF-8 以确保兼容性
-            temp_path_utf8 = self._convert_html_to_utf8(temp_path)
-            if temp_path_utf8 != temp_path:
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            
-            return temp_path_utf8
-        except Exception as e:
-            print(f"[Word] 错误: {e}")
-            raise
-        finally:
-            if word:
-                try:
-                    word.Quit()
-                except:
-                    pass
-            pythoncom.CoUninitialize()
-
-    def generate_html_via_mammoth(self, file_path):
-        """
-        Uses mammoth to convert docx to HTML for cross-platform preview (no Word dependency).
-        Returns HTML content string.
-        """
-        try:
-            import mammoth
-        except ImportError as exc:
-            raise ImportError("mammoth 未安装，请执行: pip install mammoth") from exc
-
-        with open(file_path, "rb") as docx_file:
-            result = mammoth.convert_to_html(docx_file)
-            body_html = result.value
-
-        wrapped_html = (
-            "<html><head><meta charset='utf-8'>"
-            + self.STYLE_CSS
-            + "</head><body><div class='doc-page'>"
-            + body_html
-            + "</div></body></html>"
-        )
-
-        if result.messages:
-            print(f"[预览] mammoth 消息数量: {len(result.messages)}")
-
-        return wrapped_html
-
-    def _convert_html_to_utf8(self, file_path):
-        """
-        确保 HTML 文件以 UTF-8 编码保存。
-        如果文件不是 UTF-8，尝试用其他编码读取并重新保存为 UTF-8。
-        """
-        try:
-            # 尝试用 UTF-8 读取，如果失败则尝试其他编码
-            content = None
-            encodings = ['utf-8', 'gbk', 'gb2312', 'utf-16', 'latin-1']
-            
-            for enc in encodings:
-                try:
-                    with open(file_path, 'r', encoding=enc) as f:
-                        content = f.read()
-                    print(f"[HTML转码] 原始编码: {enc}")
-                    break
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            
-            if content is None:
-                # 如果都失败，使用 errors='replace' 强制读取
-                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    content = f.read()
-                print(f"[HTML转码] 使用 UTF-8 with errors='replace'")
-            
-            # 重新保存为 UTF-8
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"[HTML转码] 文件已转换为 UTF-8: {file_path}")
-            
-            return file_path
-        except Exception as e:
-            print(f"[HTML转码] 转码失败: {e}，继续使用原文件")
-            return file_path
-    
-    def _safe_cleanup_temp(self, temp_path):
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            files_folder = temp_path.replace(".html", "_files")
-            if os.path.exists(files_folder):
-                import shutil
-                shutil.rmtree(files_folder)
-        except:
-            pass
-
-    def _cleanup_word_html(self, html_content):
-        """
-        Simplifies Word's Filtered HTML to make it more compatible with QTextEdit.
-        """
-        import re
-        # Remove XML namespaces and complex tags that confuse QTextEdit
-        html_content = re.sub(r'<xml>.*?</xml>', '', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<(meta|link|style|o:|v:|w:).*?>', '', html_content, flags=re.IGNORECASE)
-        # Keep some basic structure but simplify
-        return f"<html><body>{html_content}</body></html>"
 
     def generate_html_from_xml(self, file_path):
         """

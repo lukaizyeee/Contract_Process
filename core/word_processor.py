@@ -1,91 +1,131 @@
 import os
 import re
 import sys
+import tempfile
+import datetime
+import time
 from pathlib import Path
 
 from docx import Document
 from docx.document import Document as DocxDocument
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+
+
+class TrackChangesHelper:
+    """
+    Helper class to inject OpenXML <w:ins> and <w:del> tags for track changes support in python-docx.
+    """
+    _id_counter = 0
+
+    @classmethod
+    def _get_next_id(cls):
+        """Generates a unique ID for track changes."""
+        cls._id_counter += 1
+        # Combine timestamp and counter to ensure uniqueness even in fast loops
+        return str(int(time.time())) + str(cls._id_counter)
+
+    @staticmethod
+    def _get_iso_date():
+        """Returns current date in ISO format without microseconds (Word compatible)."""
+        return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
+    def create_ins_node(text: str, author: str = "AI_Auditor"):
+        """Creates a <w:ins> node containing a run with text."""
+        ins = OxmlElement('w:ins')
+        ins.set(qn('w:id'), TrackChangesHelper._get_next_id())
+        ins.set(qn('w:author'), author)
+        ins.set(qn('w:date'), TrackChangesHelper._get_iso_date())
+
+        r = OxmlElement('w:r')
+        t = OxmlElement('w:t')
+        t.text = text
+        r.append(t)
+        ins.append(r)
+        return ins
+
+    @staticmethod
+    def create_del_node(text: str, author: str = "AI_Auditor"):
+        """Creates a <w:del> node containing delText."""
+        del_tag = OxmlElement('w:del')
+        del_tag.set(qn('w:id'), TrackChangesHelper._get_next_id())
+        del_tag.set(qn('w:author'), author)
+        del_tag.set(qn('w:date'), TrackChangesHelper._get_iso_date())
+
+        del_text = OxmlElement('w:delText')
+        del_text.text = text
+        del_tag.append(del_text)
+        return del_tag
+
+    @staticmethod
+    def clear_paragraph_content_keep_properties(paragraph):
+        """
+        Clears all content from the paragraph but PRESERVES the pPr element (paragraph properties).
+        This prevents loss of styling (alignment, indentation, etc.) when replacing text.
+        """
+        p = paragraph._p
+        # We want to remove all children EXCEPT w:pPr
+        # Iterate over a copy of children list
+        for child in list(p):
+            if child.tag != qn('w:pPr'):
+                p.remove(child)
+
+    @staticmethod
+    def mark_paragraph_deleted(paragraph, author="AI_Auditor"):
+        """Wraps the entire paragraph content in a delete marker."""
+        text = paragraph.text
+        if not text:
+            return
+        
+        p = paragraph._p
+        TrackChangesHelper.clear_paragraph_content_keep_properties(paragraph)
+        
+        # Add deletion node
+        del_node = TrackChangesHelper.create_del_node(text, author)
+        p.append(del_node)
+
+    @staticmethod
+    def mark_paragraph_replaced(paragraph, new_text, author="AI_Auditor"):
+        """Marks old content as deleted and appends new content as inserted."""
+        old_text = paragraph.text
+        
+        p = paragraph._p
+        TrackChangesHelper.clear_paragraph_content_keep_properties(paragraph)
+        
+        # Add deletion node for old text
+        if old_text:
+            del_node = TrackChangesHelper.create_del_node(old_text, author)
+            p.append(del_node)
+        
+        # Add insertion node for new text
+        ins_node = TrackChangesHelper.create_ins_node(new_text, author)
+        p.append(ins_node)
+
+    @staticmethod
+    def append_insertion(paragraph, text, author="AI_Auditor"):
+        """Appends text to a paragraph as an insertion."""
+        p = paragraph._p
+        ins_node = TrackChangesHelper.create_ins_node(text, author)
+        p.append(ins_node)
 
 
 class WordProcessor:
     def __init__(self):
-        self.platform = sys.platform
         self.my_country = "Philippines"
-        self._check_environment()
-
-    def _check_environment(self):
-        if self.platform == "win32":
-            try:
-                import win32com.client  # noqa: F401
-                import pythoncom  # noqa: F401
-            except ImportError:
-                raise ImportError("Please run 'pip install pywin32' on Windows")
-        elif self.platform == "darwin":
-            pass
-        else:
-            raise NotImplementedError(f"Platform {self.platform} not supported")
 
     def audit_and_fix(self, input_path, output_path):
-        """执行红线审计并返回结果。Windows走COM，macOS走python-docx+AppleScript。"""
+        """执行红线审计并返回结果。全平台统一使用 XML 注入模式。"""
         input_abs_path = str(Path(input_path).resolve())
         output_abs_path = str(Path(output_path).resolve())
 
-        if self.platform == "win32":
-            return self._audit_and_fix_windows(input_abs_path, output_abs_path)
+        print(f"[WordProcessor] 使用 XML 注入进行审计...")
+        return self._audit_and_fix_xml(input_abs_path, output_abs_path)
 
-        if self.platform == "darwin":
-            return self._audit_and_fix_macos(input_abs_path, output_abs_path)
-
-        raise NotImplementedError(f"Platform {self.platform} not supported")
-
-    def _audit_and_fix_windows(self, input_abs_path: str, output_abs_path: str):
-        import pythoncom
-        import win32com.client as win32
-
-        pythoncom.CoInitialize()
-        word = None
-        doc = None
-        audit_results = []
-
-        try:
-            try:
-                word = win32.GetActiveObject("Word.Application")
-            except Exception:
-                word = win32.Dispatch("Word.Application")
-
-            word.Visible = False
-            word.DisplayAlerts = 0
-
-            doc = word.Documents.Open(input_abs_path)
-            doc.TrackRevisions = True
-
-            audit_results.extend(self._check_sensitive_info_win(doc))
-            audit_results.extend(self._check_signatories_text(doc.Content.Text))
-            audit_results.extend(self._fix_payment_invoice_win(doc))
-            audit_results.extend(self._fix_dispute_clause_win(doc))
-            audit_results.extend(self._delete_penalty_win(doc))
-
-            doc.SaveAs(output_abs_path)
-            return audit_results
-
-        except Exception as e:
-            print(f"审计过程出错: {e}")
-            return [{"id": "err", "level": "error", "title": "审计引擎异常", "content": str(e), "anchor": ""}]
-        finally:
-            if doc:
-                try:
-                    doc.Close(SaveChanges=True)
-                except Exception:
-                    pass
-            if word:
-                try:
-                    if word.Documents.Count == 0:
-                        word.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
-
-    def _audit_and_fix_macos(self, input_abs_path: str, output_abs_path: str):
+    def _audit_and_fix_xml(self, input_abs_path: str, output_abs_path: str):
+        """
+        全平台通用方案：使用 python-docx + XML 注入实现修订模式。
+        """
         audit_results = []
         try:
             doc = Document(input_abs_path)
@@ -93,6 +133,7 @@ class WordProcessor:
 
             audit_results.extend(self._check_sensitive_info_text(full_text))
             audit_results.extend(self._check_signatories_text(full_text))
+            # 传递 doc 对象进行 XML 注入修改
             audit_results.extend(self._fix_payment_invoice_docx(doc, full_text))
             audit_results.extend(self._fix_dispute_clause_docx(doc))
             audit_results.extend(self._delete_penalty_docx(doc))
@@ -102,7 +143,7 @@ class WordProcessor:
 
             return audit_results
         except Exception as e:
-            print(f"macOS 审计过程出错: {e}")
+            print(f"XML 审计过程出错: {e}")
             return [{"id": "err", "level": "error", "title": "审计引擎异常", "content": str(e), "anchor": ""}]
 
     @staticmethod
@@ -163,9 +204,10 @@ class WordProcessor:
         if "invoice" in lower_text and "prior to each payment" not in lower_text:
             for para in doc.paragraphs:
                 if "payment" in para.text.lower():
-                    para.add_run(
-                        " Party B shall issue a valid and lawful invoice of the corresponding amount "
-                        "to Party A prior to each payment made by Party A."
+                    # Use XML injection for track changes
+                    TrackChangesHelper.append_insertion(
+                        para, 
+                        " Party B shall issue a valid and lawful invoice of the corresponding amount to Party A prior to each payment made by Party A."
                     )
                     results.append(
                         {
@@ -188,7 +230,10 @@ class WordProcessor:
 
         for para in doc.paragraphs:
             if "DISPUTE RESOLUTION" in para.text:
-                para.text = "DISPUTE RESOLUTION\n" + standard_dispute
+                new_content = "DISPUTE RESOLUTION\n" + standard_dispute
+                # Use XML injection to show replacement
+                TrackChangesHelper.mark_paragraph_replaced(para, new_content)
+                
                 results.append(
                     {
                         "id": "mark_dispute_resolution",
@@ -224,105 +269,11 @@ class WordProcessor:
                         }
                     )
                     updated_text = re.sub(pattern, "", updated_text, flags=re.IGNORECASE)
+            
             if updated_text != original_text:
-                para.text = re.sub(r"\s{2,}", " ", updated_text).strip()
+                # Use XML injection to show deletion
+                # Logic: We replace the WHOLE paragraph with the cleaned text.
+                # Ideally we should only delete the specific span, but replacing whole para is safer for now.
+                TrackChangesHelper.mark_paragraph_replaced(para, updated_text.strip())
 
-        return results
-
-    # --- Windows COM rules ---
-    @staticmethod
-    def _check_sensitive_info_win(doc):
-        results = []
-        phone_pattern = r"\+86\s?\d+"
-        email_pattern = r"\b[A-Za-z0-9._%+-]+@(126|163)\.com\b"
-        full_text = doc.Content.Text
-        mark_counter = 0
-        for pattern, msg in [
-            (phone_pattern, "Please confirm: 中国电话 (+86)"),
-            (email_pattern, "Please confirm: 126/163邮箱"),
-        ]:
-            matches = re.finditer(pattern, full_text)
-            for match in matches:
-                mark_id = f"mark_sensitive_{mark_counter}"
-                mark_counter += 1
-                find_range = doc.Content
-                if find_range.Find.Execute(match.group()):
-                    doc.Comments.Add(Range=find_range, Text=f"[{mark_id}] {msg}")
-                    results.append(
-                        {
-                            "id": mark_id,
-                            "level": "warning",
-                            "title": "敏感联系方式",
-                            "content": f"识别到中国元素，建议确认：{msg}",
-                            "anchor": match.group(),
-                        }
-                    )
-        return results
-
-    @staticmethod
-    def _fix_payment_invoice_win(doc):
-        results = []
-        text = doc.Content.Text.lower()
-        if "invoice" in text and "prior to each payment" not in text:
-            find_range = doc.Content
-            if find_range.Find.Execute("payment"):
-                new_text = (
-                    " Party B shall issue a valid and lawful invoice of the corresponding amount "
-                    "to Party A prior to each payment made by Party A."
-                )
-                find_range.InsertAfter(new_text)
-                results.append(
-                    {
-                        "id": "mark_payment_invoice",
-                        "level": "error",
-                        "title": "缺失发票逻辑",
-                        "content": "检测到付款条款但缺失‘先票后款’，已自动修订补充。",
-                        "anchor": "prior to each payment",
-                    }
-                )
-        return results
-
-    def _fix_dispute_clause_win(self, doc):
-        results = []
-        standard_dispute = (
-            f"This Agreement shall be governed by and construed in accordance with the laws of {self.my_country}. "
-            "Any dispute shall be submitted to the exclusive jurisdiction of the competent courts of Party A."
-        )
-        find_range = doc.Content
-        if find_range.Find.Execute("DISPUTE RESOLUTION"):
-            find_range.Expand(Unit=4)
-            find_range.Text = "DISPUTE RESOLUTION\n" + standard_dispute
-            results.append(
-                {
-                    "id": "mark_dispute_resolution",
-                    "level": "error",
-                    "title": "争议解决修订",
-                    "content": f"已将管辖权自动替换为我方所在地 ({self.my_country})。",
-                    "anchor": "DISPUTE RESOLUTION",
-                }
-            )
-        return results
-
-    @staticmethod
-    def _delete_penalty_win(doc):
-        results = []
-        patterns = ["late payment penalty", "penalty interest"]
-        penalty_counter = 0
-        for pattern in patterns:
-            find_range = doc.Content
-            while find_range.Find.Execute(pattern):
-                find_range.Expand(Unit=4)
-                anchor = find_range.Text[:30] if len(find_range.Text) > 30 else find_range.Text
-                mark_id = f"mark_penalty_{penalty_counter}"
-                penalty_counter += 1
-                find_range.Delete()
-                results.append(
-                    {
-                        "id": mark_id,
-                        "level": "error",
-                        "title": "违约金删除",
-                        "content": f"识别到罚息表述 '{pattern}'，已自动删除。",
-                        "anchor": anchor,
-                    }
-                )
         return results

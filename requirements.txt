@@ -6,5 +6,3 @@ huggingface_hub
 pytest
 pyqt5
 PyQtWebEngine
-mammoth
-pywin32; sys_platform == 'win32'

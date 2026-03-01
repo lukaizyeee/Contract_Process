@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import threading
 import tempfile
 from core.search_engine import SemanticSearchEngine
@@ -41,7 +42,10 @@ def _inject_ids_into_html(html_content, audit_results):
             continue
         
         # 转义特殊字符用于正则表达式
-        escaped_anchor = re.escape(anchor_text)
+        # 先进行 HTML 转义 (例如 < -> &lt;)，因为 HTML 内容中的文本是经过转义的
+        anchor_html_escaped = html.escape(anchor_text)
+        # 再进行正则转义 (例如 ? -> \?)
+        escaped_anchor = re.escape(anchor_html_escaped)
         
         # 方法1：尝试在 HTML 中直接找到该文本，并用带 ID 的 span 包围它
         # 查找 >anchor_text< 的模式（即文本包含在 HTML 标签之间）
@@ -63,16 +67,20 @@ def audit_and_prepare_contract(file_path: str):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"文件未找到: {file_path}")
 
-    # 创建一个临时文件来保存修订后的文档，防止破坏原件
-    # 如果你想直接生成在同目录下，可以改成 path_revised.docx
-    temp_dir = tempfile.gettempdir()
+    # 将修订后的文件保存到原文件所在目录
+    # 命名规则：原文件名_revised.docx
+    # 例如：/path/to/contract.docx -> /path/to/contract_revised.docx
+    base_dir = os.path.dirname(file_path)
     base_name = os.path.basename(file_path)
-    revised_path = os.path.join(temp_dir, f"revised_{base_name}")
+    file_name_without_ext = os.path.splitext(base_name)[0]
+    revised_filename = f"{file_name_without_ext}_revised.docx"
+    revised_path = os.path.join(base_dir, revised_filename)
 
     try:
         # 1. 执行审计与自动修订，获取返回的卡片列表数据
         # 这个 audit_and_fix 是你在 word_processor.py 中新写的函数
         print(f"[审计开始] 输入文件: {file_path}")
+        print(f"[审计输出] 目标路径: {revised_path}")
         word_processor = _get_word_processor()
         audit_results = word_processor.audit_and_fix(file_path, revised_path)
         print(f"[审计完成] 发现 {len(audit_results)} 处修改")
