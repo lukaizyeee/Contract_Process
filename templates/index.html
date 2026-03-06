@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>合同智能审计系统</title>
+    <style>
+        /* 复刻 main_ui_qt.py 的样式 */
+        body { margin: 0; display: flex; height: 100vh; font-family: 'Segoe UI', sans-serif; background: #F2F2F7; }
+        
+        /* 左侧预览区 */
+        #preview-container { flex: 3; background: white; margin: 10px; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+        #doc-frame { flex: 1; border: none; width: 100%; height: 100%; }
+        
+        /* 右侧审计区 */
+        #audit-panel { flex: 1; background: white; margin: 10px 10px 10px 0; border-radius: 10px; display: flex; flex-direction: column; padding: 15px; }
+        .audit-card { 
+            background: white; border: 1px solid #D1D1D6; border-radius: 8px; 
+            padding: 12px; margin-bottom: 10px; cursor: pointer; transition: 0.2s;
+        }
+        .audit-card:hover { background: #F2F2F7; }
+        .audit-card.error { border-left: 5px solid #FF3B30; }
+        .audit-card.warning { border-left: 5px solid #FF9500; }
+        
+        /* 顶部工具栏 */
+        .toolbar { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .btn { padding: 8px 16px; background: #007AFF; color: white; border: none; border-radius: 6px; cursor: pointer; }
+        .btn:disabled { background: #ccc; }
+        
+        /* 遮罩层 */
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: none; justify-content: center; align-items: center; z-index: 1000;
+            flex-direction: column;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #007AFF; border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div style="margin-top: 10px; color: #555;">正在审计文档，请稍候...</div>
+    </div>
+
+    <!-- 左侧 -->
+    <div id="preview-container">
+        <div class="toolbar">
+            <span style="font-weight: bold; color: #007AFF;">📄 合同预览</span>
+            <div>
+                <input type="file" id="fileInput" accept=".docx" style="display: none">
+                <button class="btn" onclick="document.getElementById('fileInput').click()">上传合同</button>
+                <a id="downloadBtn" class="btn" style="display:none; text-decoration:none; margin-left:10px; background:#34C759;">下载修订版</a>
+            </div>
+        </div>
+        <!-- 用于渲染 HTML 内容的容器 -->
+        <div id="doc-content" style="flex:1; overflow:auto; padding:20px;"></div>
+    </div>
+
+    <!-- 右侧 -->
+    <div id="audit-panel">
+        <h3 style="color: #007AFF; margin-top: 0;">🔍 审查建议</h3>
+        <div id="audit-list" style="overflow-y: auto; flex: 1;">
+            <div style="color: #888; text-align: center; margin-top: 20px;">请上传文档开始审计</div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const auditList = document.getElementById('audit-list');
+        const docContent = document.getElementById('doc-content');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        fileInput.addEventListener('change', async (e) => {
+            if (!e.target.files[0]) return;
+            
+            const formData = new FormData();
+            formData.append('file', e.target.files[0]);
+            
+            loadingOverlay.style.display = 'flex';
+            downloadBtn.style.display = 'none';
+            auditList.innerHTML = '';
+            
+            try {
+                const resp = await fetch('/api/audit', { method: 'POST', body: formData });
+                const data = await resp.json();
+                
+                if (data.status === 'success') {
+                    renderResult(data);
+                } else {
+                    alert('审计失败: ' + (data.detail || data.message));
+                }
+            } catch (err) {
+                alert('网络错误: ' + err.message);
+            } finally {
+                loadingOverlay.style.display = 'none';
+                fileInput.value = ''; // Reset input
+            }
+        });
+
+        function renderResult(data) {
+            // 1. 渲染预览 HTML (直接注入 Shadow DOM 以隔离样式，或者直接 innerHTML)
+            // 这里使用 Shadow DOM 来避免样式污染，但为了保持跳转功能简单，我们先直接注入
+            // 如果样式冲突严重，可以考虑用 iframe
+            docContent.innerHTML = data.preview_html;
+            
+            // 2. 显示下载按钮
+            if (data.download_url) {
+                downloadBtn.href = data.download_url;
+                downloadBtn.style.display = 'inline-block';
+            }
+            
+            // 3. 渲染右侧卡片
+            if (!data.audit_results || data.audit_results.length === 0) {
+                auditList.innerHTML = '<div style="color:green; text-align:center; margin-top:20px;">🎉 未发现合规问题</div>';
+                return;
+            }
+
+            data.audit_results.forEach(item => {
+                const card = document.createElement('div');
+                card.className = `audit-card ${item.level}`;
+                card.innerHTML = `
+                    <div style="font-weight:bold; display:flex; align-items:center;">
+                        <span style="margin-right:5px;">${item.level === 'error' ? '🚩' : '⚠️'}</span>
+                        ${item.title}
+                    </div>
+                    <div style="font-size: 0.9em; margin: 8px 0; color: #333; line-height: 1.5;">${item.content}</div>
+                    <div style="font-size: 0.8em; color: #888; border-top: 1px dashed #eee; padding-top: 5px; margin-top: 5px;">
+                        原文: "${item.anchor || 'N/A'}"
+                    </div>
+                `;
+                card.onclick = () => jumpToMark(item.id);
+                auditList.appendChild(card);
+            });
+        }
+
+        // 复刻 main_ui_qt.py 中的跳转逻辑
+        function jumpToMark(markId) {
+            const el = document.getElementById(markId);
+            if (!el) {
+                console.warn("Element not found:", markId);
+                return;
+            }
+            
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // 高亮动画
+            const originalBg = el.style.backgroundColor;
+            el.style.backgroundColor = '#B8E6B8'; // 浅绿色高亮
+            el.style.transition = 'background-color 0.5s';
+            
+            setTimeout(() => {
+                el.style.backgroundColor = originalBg || 'transparent';
+            }, 2000);
+        }
+    </script>
+</body>
+</html>

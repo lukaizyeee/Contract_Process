@@ -67,14 +67,15 @@ def audit_and_prepare_contract(file_path: str):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"文件未找到: {file_path}")
 
-    # 将修订后的文件保存到原文件所在目录
+    # 将修订后的文件保存到临时目录
     # 命名规则：原文件名_revised.docx
-    # 例如：/path/to/contract.docx -> /path/to/contract_revised.docx
-    base_dir = os.path.dirname(file_path)
     base_name = os.path.basename(file_path)
     file_name_without_ext = os.path.splitext(base_name)[0]
     revised_filename = f"{file_name_without_ext}_revised.docx"
-    revised_path = os.path.join(base_dir, revised_filename)
+    
+    # 确保文件保存在输入文件所在的目录，以避免多线程时的路径混乱
+    # 输入文件已经在 temp_dir 中，所以直接使用其 dirname
+    revised_path = os.path.join(os.path.dirname(file_path), revised_filename)
 
     try:
         # 1. 执行审计与自动修订，获取返回的卡片列表数据

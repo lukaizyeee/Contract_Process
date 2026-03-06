@@ -1,85 +1,73 @@
-# 实施计划：本地法律合同检索后端
+# 实施计划：Web 版法律合同智能审计系统
 
 ## 1. 技术栈 (Tech Stack)
 
 | 组件 | 选型 | 说明 |
 | :--- | :--- | :--- |
-| **语言** | Python 3.11 | 核心逻辑 |
-| **文档解析** | `python-docx` | 用于解析段落和表格的 `.docx` 解析器 |
-| **Embedding 模型** | `BAAI/bge-m3` | 多语言、长文本支持 |
-| **Reranker 模型** | `BAAI/bge-reranker-large` | 高精度重排序 |
-| **向量搜索** | `numpy` | 暴力全量内存计算 |
-| **推理** | `sentence-transformers` | 模型加载与推理封装 |
-| **模型管理** | `huggingface_hub` | 自动模型下载（支持镜像源） |
-| **路径管理** | `pathlib` | 跨平台路径处理 |
+| **Web 框架** | `FastAPI` | 高性能、异步、易于部署 |
+| **应用服务器** | `Uvicorn` | ASGI 服务器，生产级标准 |
+| **前端技术** | HTML5 / JS (Vanilla) | 轻量级、零构建、易于嵌入 |
+| **文档解析** | `python-docx` | 核心 `.docx` 解析与修改 |
+| **AI 模型** | `BAAI/bge-m3` | Embedding (语义召回) |
+| **AI 模型** | `BAAI/bge-reranker-large` | Reranker (精准重排) |
+| **并发控制** | `ThreadPoolExecutor` | 处理 CPU 密集型任务 |
+| **文件管理** | `pathlib` + `tempfile` | 跨平台路径与临时文件隔离 |
 
 ## 2. 详细模块设计 (Detailed Module Design)
 
-### 2.1 模块 A: 配置 (`core/config.py`)
+### 2.1 Web 服务层 (`web_server.py`)
 
-* **职责**: 环境检测与全局设置。
-* **关键特性**:
-  * **操作系统检测**: `platform.system()` (Darwin/Windows)。
-  * **设备检测**:
-    * macOS: 检查 `torch.backends.mps.is_available()`。
-    * Windows: 检查 `torch.cuda.is_available()`。
-    * 后备 (Fallback): `cpu`。
-  * **环境设置**: 设置 `HF_ENDPOINT` 为镜像站点（如 `https://hf-mirror.com`）以确保国内下载可靠。
-  * **路径**: 定义相对于项目根目录的 `MODELS_DIR`。
+* **职责**: 系统的统一入口，处理 HTTP 请求。
+* **API 接口**:
+  * `GET /`: 返回前端单页应用 (`templates/index.html`)。
+  * `POST /api/audit`:
+    * 接收 `UploadFile`。
+    * 创建独立的 `UUID` 临时目录。
+    * 将任务提交给 `ThreadPoolExecutor`。
+    * 返回审计结果 JSON（含预览 HTML 和下载链接）。
+  * `GET /api/download/{request_id}/{filename}`:
+    * 安全校验路径。
+    * 返回 `FileResponse` 供用户下载。
+* **中间件**: 配置 CORS 以允许灵活的网络访问。
 
-### 2.2 模块 B: 数据摄取 (`core/ingestion.py`)
+### 2.2 核心业务层 (`api_interface.py`)
 
-* **职责**: 将 `.docx` 转换为可检索的 `Chunks` (切片)。
-* **关键逻辑**:
-  * **数据结构**: `Chunk(text, original_index, source_type, metadata)`。
-  * **清洗**: 标准化空白字符，移除空行。
-  * **切片策略**:
-    * 短段落 (< 400 字符): 保持完整。
-    * 长段落: **滑动窗口 (Sliding Window)**。
-      * 窗口大小: 3-5 个句子。
-      * 重叠 (Overlap): 1-2 个句子。
-  * **表格处理**: 将行视为单元，用分隔符 (`|`) 组合单元格文本。
+* **职责**: 编排文档处理流程，连接 Core 模块与 Web 层。
+* **关键重构**:
+  * `audit_and_prepare_contract(file_path)`:
+    * 修改了文件输出路径逻辑，不再依赖原文件目录，而是自动识别输入文件所在的临时目录。
+    * 确保在多线程环境下，每个任务操作的是自己沙箱内的文件。
 
-### 2.3 模块 C: 检索引擎 (`core/search_engine.py`)
+### 2.3 前端交互层 (`templates/index.html`)
 
-* **职责**: 管理模型并执行搜索流程。
-* **类**: `SemanticSearchEngine` (推荐使用单例模式)。
-* **初始化**:
-  * 如果缺失则下载模型（检查文件完整性）。
-  * 加载 `bge-m3` 和 `bge-reranker-large` 到检测到的设备。
-* **方法**:
-  * `load_document(chunks)`: 批量编码切片 -> `self.doc_vectors` (Tensor/NumPy)。使用 `convert_to_tensor=True`。
-  * `search(query, top_k)`:
-        1. **检索 (Retrieval)**: 编码查询。计算与 `doc_vectors` 的余弦相似度。检索 Top-N (例如 20-50)。
-        2. **重排序 (Reranking)**: 从 Top-N 构建配对 `(query, doc_text)`。输入 Cross-Encoder。
-        3. **输出 (Output)**: 按重排序分数排序，返回带有元数据的 Top-K。
+* **设计风格**: 复刻原 Qt 版本的 macOS 风格，简洁专业。
+* **关键交互**:
+  * **异步上传**: 使用 `fetch` API 上传文件，显示全屏 Loading 遮罩。
+  * **HTML 渲染**: 接收后端返回的 `preview_html`，直接渲染高保真文档。
+  * **卡片联动**: 点击右侧审计卡片，左侧文档视图自动平滑滚动 (`scrollIntoView`) 并高亮显示。
+  * **动态下载**: 审计成功后，动态显示下载按钮。
 
-### 2.4 模块 D: API 接口 (`api_interface.py`)
+### 2.4 核心处理模块 (`core/`)
 
-* **职责**: 前端交互的门面 (Facade)。
-* **关键函数**:
-  * `init_engine()`: 线程安全的引擎初始化。
-  * `process_file_for_search(path)`: 解析 -> 切片 -> 加载到引擎。
-  * `search_query(text)`: 执行搜索。
-  * `audit_and_prepare_contract(path)`: (扩展功能) 运行基于规则的审计，生成预览 HTML，并注入用于 UI 高亮的 ID。
+* **`core/word_processor.py`**:
+  * 全平台统一使用 **XML 注入** 技术实现“修订模式”。
+  * 移除了所有 Windows COM / AppleScript 依赖，实现纯 Python 运行。
+* **`core/preview_generator.py`**:
+  * 自研 XML -> HTML 解析器，支持 `<ins>`/`<del>` 标签渲染，完美还原修订痕迹。
 
 ## 3. 开发规范 (Development Guidelines)
 
-1. **内存管理**:
-    * 模型较大。确保 `SemanticSearchEngine` 是单例 (Singleton)。
-    * 避免不必要地复制大型向量数组。
-2. **跨平台**:
-    * **切勿** 使用字符串拼接路径（例如 `dir + "/" + file`）。**务必** 使用 `pathlib.Path` / 运算符。
-    * 不要在 `requirements.txt` 中包含特定平台的二进制文件。
+1. **并发安全**:
+    * 严禁使用全局变量存储请求相关的状态。
+    * 文件操作必须在 `request_id` 隔离的目录下进行。
+2. **资源管理**:
+    * `web_server.py` 需配置全局临时目录清理策略（目前为请求级清理或保留供下载，需注意磁盘占用）。
+    * AI 模型在 `startup` 事件中预加载。
 3. **错误处理**:
-    * 优雅地处理 `.doc` (旧格式)，抛出清晰的错误提示要求使用 `.docx`。
-    * 通过重试或清晰的说明处理模型下载失败（网络问题）。
-4. **性能**:
-    * 在 `sentence-transformers` 编码中使用 `convert_to_tensor=True`。
-    * 通过库隐式使用 `torch.no_grad()`，但要注意 GPU 显存 (VRAM) 的使用。
+    * API 层需捕获所有异常并返回标准的 HTTP 500 错误及详细信息，便于前端展示。
 
-## 4. 测试策略 (Testing Strategy)
+## 4. 部署策略
 
-* **单元测试**: 独立测试 `ingestion` 逻辑（滑动窗口正确性）。
-* **集成测试**: 在示例文同上运行完整的 `Load -> Search` 流程。
-* **设备测试**: 验证 Mac 上的 `mps` 加载和 Windows 上的 `cuda` 加载。
+1. **服务器**: 推荐 Mac Mini (M1/M2) 或高性能 Linux 服务器。
+2. **网络**: 确保服务器 IP 固定，或在局域网内通过 Hostname 访问。
+3. **运行**: 使用 `python web_server.py` 直接启动，或配合 `Process Monitor` (如 Supervisor) 守护进程。
