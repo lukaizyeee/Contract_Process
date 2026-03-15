@@ -31,31 +31,117 @@ def init_engine():
 def _inject_ids_into_html(html_content, audit_results):
     """
     根据 audit_results 中的 anchor 文本和 id，在 HTML 中插入相应的元素 ID。
-    这样点击右侧批注时，JavaScript 可以根据 ID 定位并高亮相应的 HTML 元素。
+    使用“文本漫游者”算法(Text Walker)，能够跨越 HTML 标签匹配文本，
+    解决因样式、链接导致文本被标签截断而无法匹配的问题。
     """
-    result_html = html_content
+    if not html_content or not audit_results:
+        return html_content
+
+    # 1. 解析 HTML 构建可见文本层 (visible_text) 和 索引映射 (index_map)
+    # index_map[i] 表示 visible_text[i] 字符在原始 html_content 中的索引位置
+    visible_chars = []
+    index_map = []
+    
+    in_tag = False
+    
+    # 简单的状态机解析 HTML
+    for i, char in enumerate(html_content):
+        if char == '<':
+            in_tag = True
+        
+        # 如果不在标签内，且不是换行符(可选，视情况而定，这里保留所有非标签字符)
+        # 注意：Word 导出的 HTML 可能包含换行符，通常被视为空白。
+        # 但 anchor 文本通常是 clean 的。
+        # 我们收集所有非标签字符。
+        if not in_tag:
+            visible_chars.append(char)
+            index_map.append(i)
+        
+        if char == '>':
+            in_tag = False
+            
+    visible_text_str = "".join(visible_chars)
+    
+    # 2. 标记已占用的文本区域，防止重复或嵌套包裹
+    # claimed[i] = True 表示 visible_text[i] 已被某个 audit item 占用
+    claimed = [False] * len(visible_chars)
+    
+    replacements = [] # 存储待执行的替换操作: {'start': html_idx, 'end': html_idx, 'id': mark_id}
+    
     for item in audit_results:
         mark_id = item.get('id')
         anchor_text = item.get('anchor', '').strip()
         
         if not mark_id or not anchor_text:
             continue
+            
+        # 构造搜索词：因为 visible_text 包含的是 HTML 转义后的字符（如 &amp;）
+        # 而 anchor_text 是原始文本（如 &），所以需要转义 anchor 才能匹配
+        search_term = html.escape(anchor_text)
+        search_len = len(search_term)
         
-        # 转义特殊字符用于正则表达式
-        # 先进行 HTML 转义 (例如 < -> &lt;)，因为 HTML 内容中的文本是经过转义的
-        anchor_html_escaped = html.escape(anchor_text)
-        # 再进行正则转义 (例如 ? -> \?)
-        escaped_anchor = re.escape(anchor_html_escaped)
-        
-        # 方法1：尝试在 HTML 中直接找到该文本，并用带 ID 的 span 包围它
-        # 查找 >anchor_text< 的模式（即文本包含在 HTML 标签之间）
-        pattern = f'({escaped_anchor})'
-        replacement = f'<span id="{mark_id}">\\1</span>'
-        
-        # 只替换第一个出现的匹配
-        result_html = re.sub(pattern, replacement, result_html, count=1)
+        if search_len == 0:
+            continue
+
+        # 在可见文本中搜索
+        start_pos = 0
+        while True:
+            found_idx = visible_text_str.find(search_term, start_pos)
+            if found_idx == -1:
+                break
+            
+            end_idx = found_idx + search_len
+            
+            # 检查该区域是否已被占用
+            # 只要有一个字符被占用，就视为冲突，跳过当前匹配，继续寻找下一个
+            is_claimed = False
+            if end_idx <= len(claimed):
+                is_claimed = any(claimed[found_idx:end_idx])
+            
+            if not is_claimed:
+                # 找到有效且未被占用的匹配！
+                
+                # 1. 标记占用
+                for k in range(found_idx, end_idx):
+                    claimed[k] = True
+                
+                # 2. 计算原始 HTML 中的插入位置
+                # 开始位置：匹配到的第一个字符在 HTML 中的索引
+                orig_start = index_map[found_idx]
+                
+                # 结束位置：匹配到的最后一个字符在 HTML 中的索引 + 1 (即插入在字符之后)
+                # visible_text[end_idx-1] 是最后一个字符
+                orig_end = index_map[end_idx-1] + 1
+                
+                replacements.append({
+                    'start': orig_start,
+                    'end': orig_end,
+                    'id': mark_id
+                })
+                
+                # 当前 audit item 处理完毕，跳出循环（处理下一个 item）
+                break
+            
+            # 如果被占用，从当前匹配位置后继续搜索
+            start_pos = found_idx + 1
+
+    # 3. 执行替换（倒序执行，以免破坏索引）
+    replacements.sort(key=lambda x: x['start'], reverse=True)
     
-    return result_html
+    # 将字符串转为列表以便插入
+    html_list = list(html_content)
+    
+    for rep in replacements:
+        s = rep['start']
+        e = rep['end']
+        m_id = rep['id']
+        
+        # 先插入后面的结束标签
+        html_list.insert(e, "</span>")
+        # 再插入前面的开始标签
+        html_list.insert(s, f'<span id="{m_id}">')
+        
+    return "".join(html_list)
 
 def audit_and_prepare_contract(file_path: str):
     """

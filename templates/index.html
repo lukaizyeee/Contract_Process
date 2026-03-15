@@ -44,6 +44,38 @@
             padding: 15px;
         }
 
+        /* 列表项样式 */
+        .category-item {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: 0.2s;
+        }
+
+        .category-item:hover {
+            background-color: #f9f9f9;
+        }
+
+        .category-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .category-count {
+            background: #FF3B30;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+
+        .category-count.warning {
+            background: #FF9500;
+        }
+
         .audit-card {
             background: white;
             border: 1px solid #D1D1D6;
@@ -86,6 +118,17 @@
 
         .btn:disabled {
             background: #ccc;
+        }
+        
+        .back-btn {
+            padding: 4px 10px;
+            background: #e5e5ea;
+            color: #333;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 10px;
         }
 
         /* 遮罩层 */
@@ -150,8 +193,11 @@
 
     <!-- 右侧 -->
     <div id="audit-panel">
-        <h3 style="color: #007AFF; margin-top: 0;">🔍 审查建议</h3>
-        <div id="audit-list" style="overflow-y: auto; flex: 1;">
+        <div style="display:flex; align-items:center; border-bottom: 1px solid #eee; padding-bottom: 10px; min-height: 30px;">
+            <button id="backBtn" class="back-btn" style="display: none;" onclick="renderSummary()">← 返回</button>
+            <h3 id="panelTitle" style="color: #007AFF; margin: 0;">🔍 审查概览</h3>
+        </div>
+        <div id="audit-list" style="overflow-y: auto; flex: 1; margin-top: 10px;">
             <div style="color: #888; text-align: center; margin-top: 20px;">请上传文档开始审计</div>
         </div>
     </div>
@@ -163,6 +209,10 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const loadingOverlay = document.getElementById('loading-overlay');
         const modelStatusEl = document.getElementById('model-status');
+        const panelTitle = document.getElementById('panelTitle');
+        const backBtn = document.getElementById('backBtn');
+        
+        let currentAuditResults = []; // Store results globally
 
         async function refreshModelStatus() {
             try {
@@ -222,6 +272,7 @@
                 const data = await resp.json();
 
                 if (data.status === 'success') {
+                    currentAuditResults = data.audit_results || []; // Update global results
                     renderResult(data);
                 } else {
                     alert('审计失败: ' + (data.detail || data.message));
@@ -235,9 +286,7 @@
         });
 
         function renderResult(data) {
-            // 1. 渲染预览 HTML (直接注入 Shadow DOM 以隔离样式，或者直接 innerHTML)
-            // 这里使用 Shadow DOM 来避免样式污染，但为了保持跳转功能简单，我们先直接注入
-            // 如果样式冲突严重，可以考虑用 iframe
+            // 1. 渲染预览 HTML
             docContent.innerHTML = data.preview_html;
 
             // 2. 显示下载按钮
@@ -246,19 +295,75 @@
                 downloadBtn.style.display = 'inline-block';
             }
 
-            // 3. 渲染右侧卡片
-            if (!data.audit_results || data.audit_results.length === 0) {
+            // 3. 渲染审计概览列表
+            renderSummary();
+        }
+
+        function renderSummary() {
+            auditList.innerHTML = '';
+            panelTitle.textContent = '🔍 审查概览';
+            backBtn.style.display = 'none';
+
+            if (!currentAuditResults || currentAuditResults.length === 0) {
                 auditList.innerHTML = '<div style="color:green; text-align:center; margin-top:20px;">🎉 未发现合规问题</div>';
                 return;
             }
 
-            data.audit_results.forEach(item => {
+            // Group by category
+            const groups = {};
+            currentAuditResults.forEach(item => {
+                const cat = item.category || '未分类';
+                if (!groups[cat]) groups[cat] = [];
+                groups[cat].push(item);
+            });
+
+            // Render categories
+            Object.keys(groups).forEach(cat => {
+                const items = groups[cat];
+                const hasError = items.some(i => i.level === 'error');
+                
+                const div = document.createElement('div');
+                div.className = 'category-item';
+                div.innerHTML = `
+                    <span class="category-name">${cat}</span>
+                    <span class="category-count ${hasError ? '' : 'warning'}">${items.length}</span>
+                `;
+                div.onclick = () => renderDetail(cat, items);
+                auditList.appendChild(div);
+            });
+
+            // "Show All" option
+            const allDiv = document.createElement('div');
+            allDiv.className = 'category-item';
+            allDiv.style.marginTop = '10px';
+            allDiv.style.borderTop = '2px solid #eee';
+            allDiv.innerHTML = `
+                <span class="category-name" style="color:#007AFF;">显示全部问题</span>
+                <span class="category-count" style="background:#007AFF;">${currentAuditResults.length}</span>
+            `;
+            allDiv.onclick = () => renderDetail('全部问题', currentAuditResults);
+            auditList.appendChild(allDiv);
+        }
+
+        function renderDetail(title, items) {
+            auditList.innerHTML = '';
+            panelTitle.textContent = title;
+            backBtn.style.display = 'inline-block';
+
+            if (items.length === 0) {
+                auditList.innerHTML = '<div style="color:#888; text-align:center; margin-top:20px;">该分类下无问题</div>';
+                return;
+            }
+
+            items.forEach(item => {
                 const card = document.createElement('div');
                 card.className = `audit-card ${item.level}`;
                 card.innerHTML = `
-                    <div style="font-weight:bold; display:flex; align-items:center;">
-                        <span style="margin-right:5px;">${item.level === 'error' ? '🚩' : '⚠️'}</span>
-                        ${item.title}
+                    <div style="font-weight:bold; display:flex; align-items:center; justify-content:space-between;">
+                        <div>
+                            <span style="margin-right:5px;">${item.level === 'error' ? '🚩' : '⚠️'}</span>
+                            ${item.title}
+                        </div>
                     </div>
                     <div style="font-size: 0.9em; margin: 8px 0; color: #333; line-height: 1.5;">${item.content}</div>
                     <div style="font-size: 0.8em; color: #888; border-top: 1px dashed #eee; padding-top: 5px; margin-top: 5px;">
@@ -270,11 +375,12 @@
             });
         }
 
-        // 复刻 main_ui_qt.py 中的跳转逻辑
         function jumpToMark(markId) {
             const el = document.getElementById(markId);
             if (!el) {
                 console.warn("Element not found:", markId);
+                // Try to find inside links if nested
+                // But document.getElementById should find it regardless of nesting
                 return;
             }
 

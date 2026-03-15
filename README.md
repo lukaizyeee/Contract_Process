@@ -2,18 +2,29 @@
 
 这是一个**本地化、高精度、跨语言**的英文法律合同中文语义检索与审计系统。项目已从桌面应用 (Qt) 迁移至 **Web 架构 (B/S)**，旨在通过局域网共享高性能计算资源，提供轻量级、无安装的合同审查体验。
 
-## 📚 项目文档 (Documentation)
+## 📚 项目文档导航 (Documentation Navigation)
 
-请参考以下文档以了解项目的详细规划与进度：
+为了帮助开发者和用户快速理解项目，我们将文档分为以下几类：
 
-* **[项目总览 (Master Plan)](./master_plan.md)**
-  * 包含项目愿景、核心价值、架构概览及未来路线图。
-* **[实施计划 (Implementation Plan)](./implementation_plan.md)**
-  * 包含详细的技术栈选型、后端 API 设计、Web 前端规范及并发处理策略。
-* **[Web 部署方案 (Web Deployment Plan)](./web_deployment_plan.md)**
-  * 包含详细的 B/S 架构设计、并发支持、临时文件管理及部署指南。
-* **[任务状态 (Tasks Status)](./tasks.md)**
-  * 实时更新的项目进度追踪与待办事项清单。
+### 核心架构与规范
+*   **[项目结构与功能指南 (project_structure.md)](./project_structure.md)**
+    *   **必读**。定义了项目的目录结构、各模块（Web服务、API层、核心引擎）的职责边界、数据流向及开发防坑指南。
+*   **[AI 工作指引 (ai_instruction.md)](./ai_instruction.md)**
+    *   规定了 AI 助手在执行代码修改任务前的阅读规范，强调“先读后写”原则，确保代码风格和架构的一致性。
+
+### 规划与实施
+*   **[项目总览 (master_plan.md)](./master_plan.md)**
+    *   阐述了项目的宏观愿景、核心价值（隐私优先、零安装）、技术约束及未来路线图。
+*   **[实施计划 (implementation_plan.md)](./implementation_plan.md)**
+    *   包含详细的技术栈选型（FastAPI, python-docx）、后端 API 设计及 Web 前端架构规范。
+*   **[审计功能实现计划 (audit_implementation_plan.md)](./audit_implementation_plan.md)**
+    *   专注于合同审计业务逻辑，详细描述了从正则匹配到语义检索的升级路径，以及具体的修订规则（如敏感信息批注、条款增删）。
+
+### 进度追踪
+*   **[任务状态 (tasks.md)](./tasks.md)**
+    *   实时更新的项目进度追踪，包含已完成的功能（架构重构、预览生成）和待办事项（多用户支持、LLM集成）。
+
+---
 
 ## 🚀 快速开始 (Quick Start)
 

@@ -156,9 +156,11 @@ class TrackChangesHelper:
             print(f"Error adding comment: {e}")
 
 
+from core.config import config
+
 class WordProcessor:
     def __init__(self):
-        self.my_country = "Philippines"
+        self.my_country = "Philippines" # 默认值，后续可从 config 读取
 
     def audit_and_fix(self, input_path, output_path):
         """执行红线审计并返回结果。全平台统一使用 XML 注入模式。"""
@@ -179,22 +181,26 @@ class WordProcessor:
         audit_results = []
         try:
             doc = Document(input_abs_path)
+            
+            # Note: We will use the globally initialized SemanticSearchEngine from api_interface 
+            # or pass it in later when implementing Step 2.3 Semantic Audit.
+            # For now, we only perform the regex-based Global Check.
+            
             full_text = self._collect_doc_text(doc)
 
-            audit_results.extend(self._check_sensitive_info_text(full_text))
+            # 2.1 全文识别 (Global Check)
+            audit_results.extend(self._check_global_compliance(doc, full_text))
+
+            # 2.2 文首/文末 (Header/Footer)
+            # 暂未实现，保留原逻辑或后续添加
             audit_results.extend(self._check_signatories_text(full_text))
             
-            # 传递 doc 对象进行 XML 注入修改
-            # 1. 标记敏感信息（批注）
-            self._mark_sensitive_info_in_doc(doc)
-            
-            # 2. 修复发票条款（修订）
+            # 2.3 正文部分 (Body) - 语义审计
+            # 发票条款
             audit_results.extend(self._fix_payment_invoice_docx(doc, full_text))
-            
-            # 3. 修复争议解决（修订）
+            # 争议解决
             audit_results.extend(self._fix_dispute_clause_docx(doc))
-            
-            # 4. 删除罚金（修订）
+            # 违约金删除
             audit_results.extend(self._delete_penalty_docx(doc))
 
             Path(output_abs_path).parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +209,8 @@ class WordProcessor:
             return audit_results
         except Exception as e:
             print(f"XML 审计过程出错: {e}")
+            import traceback
+            traceback.print_exc()
             return [{"id": "err", "level": "error", "title": "审计引擎异常", "content": str(e), "anchor": ""}]
 
     @staticmethod
@@ -216,47 +224,62 @@ class WordProcessor:
                     table_texts.append(row_text)
         return "\n".join(paragraph_texts + table_texts)
 
-    @staticmethod
-    def _check_sensitive_info_text(full_text: str):
-        # 此函数仅返回审计结果用于前端展示，不进行文档修改
-        # 文档修改逻辑在 _audit_and_fix_xml 中统一处理
+    def _check_global_compliance(self, doc: DocxDocument, full_text: str):
+        """
+        2.1 全文识别 (Global Check)
+        - 中国电话
+        - 126/163邮箱
+        """
         results = []
-        phone_pattern = r"\+86\s?\d+"
-        email_pattern = r"\b[A-Za-z0-9._%+-]+@(126|163)\.com\b"
+        
+        # Regex patterns as per requirement
+        # (+86|0086)?\s?1[3-9]\d{9}
+        phone_pattern = r"(\+86|0086)?\s?1[3-9]\d{9}"
+        # @(126|163).com
+        email_pattern = r"[a-zA-Z0-9._%+-]+@(126|163)\.com"
+        
         mark_counter = 0
 
-        for pattern, msg in [
-            (phone_pattern, "Please confirm: 中国电话 (+86)"),
-            (email_pattern, "Please confirm: 126/163邮箱"),
-        ]:
-            for match in re.finditer(pattern, full_text):
-                mark_id = f"mark_sensitive_{mark_counter}"
-                mark_counter += 1
-                results.append(
-                    {
-                        "id": mark_id,
-                        "level": "warning",
-                        "title": "敏感联系方式",
-                        "content": f"识别到中国元素，建议确认：{msg}",
-                        "anchor": match.group(),
-                    }
-                )
-        return results
-
-    def _mark_sensitive_info_in_doc(self, doc: DocxDocument):
-        # 新增函数：在文档中标记敏感信息（使用批注方式）
-        phone_pattern = r"\+86\s?\d+"
-        email_pattern = r"\b[A-Za-z0-9._%+-]+@(126|163)\.com\b"
+        # We need to find the paragraph containing the match to add comment
+        # Iterating paragraphs again is inefficient but robust. 
+        # Ideally we could map matches to paragraphs during text collection, 
+        # but _collect_doc_text returns a single string.
+        # Let's iterate paragraphs.
         
         for para in doc.paragraphs:
             text = para.text
-            for pattern, msg in [
-                (phone_pattern, "请确认此中国电话号码是否合规"),
-                (email_pattern, "请确认此个人邮箱是否合规"),
-            ]:
-                if re.search(pattern, text):
-                    # 在段落末尾添加批注
-                    TrackChangesHelper.add_comment(doc, para, msg, author="Dacheng")
+            if not text:
+                continue
+                
+            # Check Phone
+            for match in re.finditer(phone_pattern, text):
+                mark_id = f"mark_global_phone_{mark_counter}"
+                mark_counter += 1
+                results.append({
+                    "id": mark_id,
+                    "level": "warning",
+                    "category": "全文识别", # Category Added
+                    "title": "敏感联系方式",
+                    "content": "全文不得有中国电话（包括中国区号+86），请确认。",
+                    "anchor": match.group()
+                })
+                TrackChangesHelper.add_comment(doc, para, "Please confirm: 中国电话", author="Dacheng")
+                
+            # Check Email
+            for match in re.finditer(email_pattern, text):
+                mark_id = f"mark_global_email_{mark_counter}"
+                mark_counter += 1
+                results.append({
+                    "id": mark_id,
+                    "level": "warning",
+                    "category": "全文识别", # Category Added
+                    "title": "敏感邮箱",
+                    "content": "全文不得有126邮箱、163邮箱，请确认。",
+                    "anchor": match.group()
+                })
+                TrackChangesHelper.add_comment(doc, para, "Please confirm: 126/163邮箱", author="Dacheng")
+                
+        return results
 
     @staticmethod
     def _check_signatories_text(full_text: str):
@@ -267,6 +290,7 @@ class WordProcessor:
                 {
                     "id": "sig_missing",
                     "level": "warning",
+                    "category": "文首文末", # Category Added
                     "title": "签字人职位缺失",
                     "content": "文末未检测到签字人职位抬头，请手动补全以符合合规要求。",
                     "anchor": "Signature",
@@ -289,6 +313,7 @@ class WordProcessor:
                         {
                             "id": "mark_payment_invoice",
                             "level": "error",
+                            "category": "正文条款", # Category Added
                             "title": "缺失发票逻辑",
                             "content": "检测到付款条款但缺失‘先票后款’，已自动修订补充。",
                             "anchor": "prior to each payment",
@@ -325,6 +350,7 @@ class WordProcessor:
                     {
                         "id": "mark_dispute_resolution",
                         "level": "error",
+                        "category": "正文条款", # Category Added
                         "title": "争议解决修订",
                         "content": f"已将管辖权自动替换为我方所在地 ({self.my_country})。",
                         "anchor": "DISPUTE RESOLUTION",
@@ -350,6 +376,7 @@ class WordProcessor:
                         {
                             "id": mark_id,
                             "level": "error",
+                            "category": "正文条款", # Category Added
                             "title": "违约金删除",
                             "content": f"识别到罚息表述 '{pattern}'，已自动删除。",
                             "anchor": original_text[:30] if original_text else pattern,

@@ -1,6 +1,9 @@
 # Models (large files, download on demand)
 models/
 
+# 需求-260211.txt
+需求-260211.txt
+
 # Python
 __pycache__/
 *.py[cod]

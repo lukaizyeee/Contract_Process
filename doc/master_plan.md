@@ -29,16 +29,12 @@
     * 负责静态资源托管 (`index.html`)、API 路由分发、请求上下文管理。
     * **并发控制**: 使用 `ThreadPoolExecutor` 将 CPU 密集型任务卸载到线程池。
 
-2. **Infrastructure Layer (基础设施层)**
-    * `core/config.py`: 负责跨平台环境检测、硬件加速适配、路径管理及模型下载配置。
-    * **文件管理**: 为每个 API 请求分配独立的 `UUID` 临时目录，确保并发安全。
-
-3. **Core Processing Layer (核心处理层)**
+2. **Core Processing Layer (核心处理层)**
     * `core/ingestion.py`: `.docx` 解析与切片。
     * `core/word_processor.py`: 基于 XML 注入的文档审计与修订引擎（去 Word 依赖）。
     * `core/preview_generator.py`: 生成带修订痕迹的高保真 HTML 预览。
 
-4. **Retrieval Engine Layer (检索引擎层)**
+3. **Retrieval Engine Layer (检索引擎层)**
     * `core/search_engine.py`: 核心双层检索逻辑 (`bge-m3` + `bge-reranker-large`)。
 
 ## 5. Future Roadmap (未来规划)

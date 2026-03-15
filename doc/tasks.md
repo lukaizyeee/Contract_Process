@@ -4,14 +4,13 @@
 
 ### 架构重构 (Architecture Refactoring)
 
-- [x] **Web 化迁移** (从 Qt 桌面端迁移至 B/S 架构)
+- [x] **Web 化迁移**
   - [x] 创建 `web_server.py` (FastAPI + Uvicorn)。
-  - [x] 实现前端页面 `templates/index.html` (复刻原 UI 交互)。
-  - [x] 移除旧的 `main_ui_qt.py` 及相关依赖。
+  - [x] 实现前端页面 `templates/index.html`。
+  - [x] 移除旧的 `main_ui_qt.py`。
 - [x] **并发与部署支持**
-  - [x] 引入 `ThreadPoolExecutor` 处理 CPU 密集型审计任务。
-  - [x] 实现基于 `UUID` 的请求级文件隔离机制。
-  - [x] 编写 `web_deployment_plan.md` 部署指南。
+  - [x] 引入 `ThreadPoolExecutor`。
+  - [x] 实现基于 `UUID` 的请求级文件隔离。
 
 ### 核心功能 (Core Features)
 
@@ -27,11 +26,9 @@
 ### 接口与交互 (API & UI)
 
 - [x] **API 接口** (`api_interface.py`)
-  - [x] 适配 Web 层的异步调用与路径管理。
 - [x] **前端交互**
   - [x] 文件上传与 Loading 状态。
-  - [x] 审计结果卡片展示。
-  - [x] 点击卡片跳转高亮。
+  - [x] 审计结果卡片展示与跳转。
   - [x] 修订版文档下载。
 
 ## ⏳ 待完成/规划中 (Pending / Future Tasks)
