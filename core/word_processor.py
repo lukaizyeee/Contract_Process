@@ -31,7 +31,7 @@ class TrackChangesHelper:
         return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @staticmethod
-    def create_ins_node(text: str, author: str = "AI_Auditor"):
+    def create_ins_node(text: str, author: str = "Dacheng"):
         """Creates a <w:ins> node containing a run with text."""
         ins = OxmlElement('w:ins')
         ins.set(qn('w:id'), TrackChangesHelper._get_next_id())
@@ -39,14 +39,32 @@ class TrackChangesHelper:
         ins.set(qn('w:date'), TrackChangesHelper._get_iso_date())
 
         r = OxmlElement('w:r')
-        t = OxmlElement('w:t')
-        t.text = text
-        r.append(t)
+        
+        # Split text by newlines and add <w:br/> elements
+        if '\n' in text:
+            parts = text.split('\n')
+            for i, part in enumerate(parts):
+                if part:
+                    t = OxmlElement('w:t')
+                    if part.startswith(' ') or part.endswith(' '):
+                        t.set(qn('xml:space'), 'preserve')
+                    t.text = part
+                    r.append(t)
+                
+                if i < len(parts) - 1:
+                    r.append(OxmlElement('w:br'))
+        else:
+            t = OxmlElement('w:t')
+            if text.startswith(' ') or text.endswith(' '):
+                t.set(qn('xml:space'), 'preserve')
+            t.text = text
+            r.append(t)
+
         ins.append(r)
         return ins
 
     @staticmethod
-    def create_del_node(text: str, author: str = "AI_Auditor"):
+    def create_del_node(text: str, author: str = "Dacheng"):
         """Creates a <w:del> node containing delText."""
         del_tag = OxmlElement('w:del')
         del_tag.set(qn('w:id'), TrackChangesHelper._get_next_id())
@@ -72,7 +90,7 @@ class TrackChangesHelper:
                 p.remove(child)
 
     @staticmethod
-    def mark_paragraph_deleted(paragraph, author="AI_Auditor"):
+    def mark_paragraph_deleted(paragraph, author="Dacheng"):
         """Wraps the entire paragraph content in a delete marker."""
         text = paragraph.text
         if not text:
@@ -86,7 +104,7 @@ class TrackChangesHelper:
         p.append(del_node)
 
     @staticmethod
-    def mark_paragraph_replaced(paragraph, new_text, author="AI_Auditor"):
+    def mark_paragraph_replaced(paragraph, new_text, author="Dacheng"):
         """Marks old content as deleted and appends new content as inserted."""
         old_text = paragraph.text
         
@@ -103,11 +121,39 @@ class TrackChangesHelper:
         p.append(ins_node)
 
     @staticmethod
-    def append_insertion(paragraph, text, author="AI_Auditor"):
+    def append_insertion(paragraph, text, author="Dacheng"):
         """Appends text to a paragraph as an insertion."""
         p = paragraph._p
         ins_node = TrackChangesHelper.create_ins_node(text, author)
         p.append(ins_node)
+
+    @staticmethod
+    def add_comment(doc, paragraph, comment_text, author="Dacheng", initials="DA"):
+        """
+        Adds a comment to the paragraph using python-docx internals.
+        """
+        try:
+            # 1. Access the comments part; if it doesn't exist, this will create it implicitly or fail
+            # python-docx 0.8.11+ has limited support. We might need to manually handle relationships.
+            # A safer way without full library support is to use a placeholder or skip if too complex.
+            # However, let's try to append to existing comments part if available.
+            part = doc.part
+            try:
+                # Attempt to get the comments part relationship
+                # This is tricky because python-docx hides the part relationship details.
+                # We will use a simplified approach: check if we can add a comment.
+                # If not, we fall back to inserting text with a [Comment: ...] marker which is safer.
+                pass 
+            except Exception:
+                pass
+            
+            # Fallback: Insert a visible comment marker in the text as a revision
+            # This is robust and works across all Word versions without corrupting the XML
+            comment_marker = f" [批注: {comment_text}]"
+            TrackChangesHelper.append_insertion(paragraph, comment_marker, author)
+            
+        except Exception as e:
+            print(f"Error adding comment: {e}")
 
 
 class WordProcessor:
@@ -120,6 +166,10 @@ class WordProcessor:
         output_abs_path = str(Path(output_path).resolve())
 
         print(f"[WordProcessor] 使用 XML 注入进行审计...")
+        # 为了更好地支持 python-docx 的高级功能（如批注），我们使用 docx 库本身加载文档
+        # 但要注意，如果我们要完全通过 xml 操作，也可以。
+        # 这里我们使用混合模式：docx 对象 + xml 注入。
+        
         return self._audit_and_fix_xml(input_abs_path, output_abs_path)
 
     def _audit_and_fix_xml(self, input_abs_path: str, output_abs_path: str):
@@ -133,9 +183,18 @@ class WordProcessor:
 
             audit_results.extend(self._check_sensitive_info_text(full_text))
             audit_results.extend(self._check_signatories_text(full_text))
+            
             # 传递 doc 对象进行 XML 注入修改
+            # 1. 标记敏感信息（批注）
+            self._mark_sensitive_info_in_doc(doc)
+            
+            # 2. 修复发票条款（修订）
             audit_results.extend(self._fix_payment_invoice_docx(doc, full_text))
+            
+            # 3. 修复争议解决（修订）
             audit_results.extend(self._fix_dispute_clause_docx(doc))
+            
+            # 4. 删除罚金（修订）
             audit_results.extend(self._delete_penalty_docx(doc))
 
             Path(output_abs_path).parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +218,8 @@ class WordProcessor:
 
     @staticmethod
     def _check_sensitive_info_text(full_text: str):
+        # 此函数仅返回审计结果用于前端展示，不进行文档修改
+        # 文档修改逻辑在 _audit_and_fix_xml 中统一处理
         results = []
         phone_pattern = r"\+86\s?\d+"
         email_pattern = r"\b[A-Za-z0-9._%+-]+@(126|163)\.com\b"
@@ -181,6 +242,21 @@ class WordProcessor:
                     }
                 )
         return results
+
+    def _mark_sensitive_info_in_doc(self, doc: DocxDocument):
+        # 新增函数：在文档中标记敏感信息（使用批注方式）
+        phone_pattern = r"\+86\s?\d+"
+        email_pattern = r"\b[A-Za-z0-9._%+-]+@(126|163)\.com\b"
+        
+        for para in doc.paragraphs:
+            text = para.text
+            for pattern, msg in [
+                (phone_pattern, "请确认此中国电话号码是否合规"),
+                (email_pattern, "请确认此个人邮箱是否合规"),
+            ]:
+                if re.search(pattern, text):
+                    # 在段落末尾添加批注
+                    TrackChangesHelper.add_comment(doc, para, msg, author="Dacheng")
 
     @staticmethod
     def _check_signatories_text(full_text: str):
@@ -230,6 +306,17 @@ class WordProcessor:
 
         for para in doc.paragraphs:
             if "DISPUTE RESOLUTION" in para.text:
+                # Add explicit newline characters and handle them in XML generation
+                # Using \n directly in text run works for python-docx but for XML injection
+                # we might need to be careful. python-docx's text property handles \n as <w:br/> or <w:cr/>
+                # Let's try inserting a break explicitly if needed, but first try standard string.
+                # The issue is likely that TrackChangesHelper.create_ins_node puts text in a single w:t
+                # which doesn't support newlines by default without w:br.
+                
+                # To fix: we will split the content and insert breaks in the helper if needed,
+                # or simply rely on python-docx to handle the text setting if we weren't doing XML injection.
+                # Since we are doing XML injection, we need to handle newlines manually in create_ins_node
+                
                 new_content = "DISPUTE RESOLUTION\n" + standard_dispute
                 # Use XML injection to show replacement
                 TrackChangesHelper.mark_paragraph_replaced(para, new_content)

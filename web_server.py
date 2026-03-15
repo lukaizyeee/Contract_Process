@@ -13,33 +13,56 @@ import asyncio
 # 复用现有核心逻辑
 from api_interface import audit_and_prepare_contract, init_engine
 
-app = FastAPI(title="Legal Audit Web")
-
 # 创建线程池以处理同步的审计任务，避免阻塞主线程
-executor = ThreadPoolExecutor(max_workers=5) # 限制最大并发数为 5
+executor = ThreadPoolExecutor(max_workers=5)
 
 # 全局临时目录，用于存放处理结果以便下载 (需定期清理)
 # 注意：在生产环境中，应使用 Redis 或数据库记录 request_id 与文件路径的映射，并配合后台任务清理
 GLOBAL_TEMP_DIR = Path(tempfile.gettempdir()) / "legal_audit_results"
 GLOBAL_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# 挂载静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
+from contextlib import asynccontextmanager
 
-@app.on_event("startup")
-async def startup_event():
-    # 预加载模型，避免首次请求延迟
-    print("正在初始化 AI 引擎...")
-    # 在线程池中初始化，避免阻塞
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(executor, init_engine)
-    print("AI 引擎初始化完成")
+MODEL_STATUS = {
+    "state": "not_started",
+    "message": "",
+}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    MODEL_STATUS["state"] = "loading"
+    MODEL_STATUS["message"] = "正在初始化 AI 引擎..."
+    print(MODEL_STATUS["message"], flush=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(executor, init_engine)
+        MODEL_STATUS["state"] = "ready"
+        MODEL_STATUS["message"] = "AI 引擎初始化完成"
+        print(MODEL_STATUS["message"], flush=True)
+    except Exception as e:
+        MODEL_STATUS["state"] = "error"
+        MODEL_STATUS["message"] = f"AI 引擎初始化失败: {e}"
+        print(MODEL_STATUS["message"], flush=True)
+    yield
+
+app = FastAPI(title="Legal Audit Web", lifespan=lifespan)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     # 返回前端页面 (index.html)
     with open("templates/index.html", "r", encoding="utf-8") as f:
         return f.read()
+
+@app.get("/api/status")
+async def get_status():
+    return JSONResponse(
+        {
+            "model": MODEL_STATUS,
+        }
+    )
 
 @app.post("/api/audit")
 async def audit_document(file: UploadFile = File(...)):

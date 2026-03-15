@@ -3,7 +3,6 @@ import re
 import html
 import threading
 import tempfile
-from core.search_engine import SemanticSearchEngine
 from core.ingestion import DocProcessor
 from core.preview_generator import DocxPreviewGenerator 
 
@@ -25,6 +24,7 @@ def init_engine():
     global _engine_instance
     with _lock:
         if _engine_instance is None:
+            from core.search_engine import SemanticSearchEngine
             _engine_instance = SemanticSearchEngine()
     return _engine_instance
 

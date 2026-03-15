@@ -164,14 +164,23 @@ class DocxPreviewGenerator:
         """
         Parses a w:r element, extracting text and applying styles.
         """
-        text = self._get_text(run_element)
-        if not text:
-            # Handle line breaks
-            if run_element.find(qn('w:br')) is not None:
-                return "<br/>"
+        # Iterate through children to preserve order of text and breaks
+        content_parts = []
+        for child in run_element:
+            if child.tag == qn('w:t'):
+                if child.text:
+                    content_parts.append(html.escape(child.text))
+            elif child.tag == qn('w:br'):
+                content_parts.append("<br/>")
+            elif child.tag == qn('w:tab'):
+                content_parts.append("&emsp;") # Approximation for tab
+            elif child.tag == qn('w:cr'):
+                content_parts.append("<br/>")
+
+        if not content_parts:
             return ""
         
-        text = html.escape(text)
+        inner_html = "".join(content_parts)
         
         # Extract styles from w:rPr
         rPr = run_element.find(qn('w:rPr'))
@@ -227,7 +236,7 @@ class DocxPreviewGenerator:
                     style_parts.append(f"font-family: '{ascii_font}'")
 
             if style_parts:
-                return f'<span style="{"; ".join(style_parts)}">{text}</span>'
+                return f'<span style="{"; ".join(style_parts)}">{inner_html}</span>'
         
         # Check for comment references within this run
         comment_ref = run_element.find(qn('w:commentReference'))
@@ -241,7 +250,7 @@ class DocxPreviewGenerator:
                     safe = html.escape(comment_text)
                     comment_html = f'<sup style="color:#555;font-size:0.8em; margin-left:4px;" title="{safe}">[{cid}]</sup>'
 
-        return text + comment_html
+        return inner_html + comment_html
 
     def _parse_table(self, tbl_element):
         rows = []
@@ -263,6 +272,10 @@ class DocxPreviewGenerator:
         return f"<table>{''.join(rows)}</table>"
 
     def _get_text(self, element):
+        # We need to preserve order of text and br elements
+        # This is a simplified version. For correct rendering, we should iterate children.
+        # But _parse_run handles br separately.
+        # Let's just join all text.
         return "".join([node.text for node in element.iter(qn('w:t')) if node.text]) or ""
 
     def _get_del_text(self, element):
