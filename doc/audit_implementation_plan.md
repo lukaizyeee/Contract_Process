@@ -1,125 +1,181 @@
-# 合同智能审计需求实现计划 (Implementation Plan for Contract Audit)
+# 审计需求实现计划
 
-本文档基于 `需求-260211.txt`，详细描述了如何将现有的基于规则（Regex）的审计系统升级为基于语义理解（Semantic Search/RAG）的智能审计系统，并实现具体的修订与批注要求。注意，所有的合同变更都需要以修订模式留下痕迹，即所有的变更都需要在合同中以绿色下划线或红色删除线的形式展示。
+本文档基于核心需求文件 [needs-260211.txt](../needs-260211.txt) 整理，目标不是把未来能力当成现状，而是把每个需求点拆成：
 
-## 1. 核心变更 (Core Changes)
+* 需求原意
+* 当前实现状态
+* 当前代码行为
+* 后续实现建议
 
-1. **审计主体变更**:
-   - 默认批注作者名称统一修改为 **"Dacheng"**。
-   - 需先识别合同中的“我方”身份（Party A 或其他称呼），默认 Party A 为我方。
-2. **技术路线升级**:
-   - **现状**: 主要依赖正则表达式匹配关键词（如 `+86`, `invoice`）。
-   - **目标**: 引入 **语义检索 (RAG)** 技术。先通过 Embedding 模型检索出与审计点相关的条款（如“付款条款”、“争议解决”、“通知条款”），再结合规则或 LLM（未来）进行判定，以提高准确率并减少误报。
-3. **修订方式增强**:
-   - 敏感信息（电话/邮箱）及签字人问题 -> **插入批注** (`[批注: ...]`)。
-   - 条款缺失（发票、退款、银行变更、争议解决、代扣税） -> **插入新条款** (绿色下划线)。
-   - 不利条款（罚息） -> **删除** (红色删除线)。
+## 1. 总体判断
 
-***
+当前主审计流程是**规则驱动 + 固定修订模板**，不是完整的语义审计流程。
 
-## 2. 详细需求对照与实现方案 (Detailed Requirements Mapping)
+当前已经具备的基础能力：
 
-### 2.0 基础设置
+* 可读写 `.docx`
+* 可插入修订痕迹
+* 可删除文本
+* 可输出 HTML 预览
+* 可独立加载语义检索引擎
 
-- **需求**: 批注名称为“Dacheng”。
-- **实现**: 修改 `TrackChangesHelper` 的默认 `author` 参数为 `"Dacheng"`。
-- **需求**: 识别我方身份（默认 Party A）。
-- **实现**: 在 `WordProcessor` 初始化时，增加一个简单的逻辑扫描首部定义（"This Agreement... between..."），提取 Party A 的指代。目前阶段可先硬编码默认逻辑，后续通过语义提取优化。
+当前尚未完成的关键升级：
 
-### 2.1 全文识别 (Global Check)
+* 主流程接入语义召回
+* 根据召回结果定位相关段落
+* 根据需求点执行更细的语义判断
+* 在必要时接入 LLM 做不确定性判断
 
-| 需求点              | 检索策略 (Search Strategy) | 判定逻辑 (Logic)            | 处理动作 (Action) | <br />                   |
-| :--------------- | :--------------------- | :---------------------- | :------------ | :----------------------- |
-| **1. 中国电话**      | 全文正则扫描 \`(+86          | 0086)?\s?1\[3-9]\d{9}\` | 命中即违规         | **批注**: `Please confirm` |
-| **2. 126/163邮箱** | 全文正则扫描 \`@(126         | 163).com\`              | 命中即违规         | **批注**: `Please confirm` |
-| **3. 邮件一致性**     | (暂不实现)                 | 需邮件输入接口，目前仅处理合同本体       | 预留接口          | <br />                   |
+## 2. 需求源中的关键前提
 
-### 2.2 文首/文末 (Header/Footer)
+来自 [needs-260211.txt](../needs-260211.txt) 的两个前提非常关键：
 
-| 需求点                  | 检索策略                | 判定逻辑                                          | 处理动作                     |
-| :------------------- | :------------------ | :-------------------------------------------- | :----------------------- |
-| **1. 代表人/权签人为中国人姓名** | 语义检索  "权签人", "代表人"  | 将相关度最高的几个给llm判断                               | **批注**: `Please confirm` |
-| **2. 代表人/权签人没有职位信息** | 语义检索 "代表人/权签人的职位信息" | 给llm判断，是不是没有要求填写title，或者herein represented by | **批注**: `Please clarify` |
+* 批注名称需要为 `dacheng`
+* 需要先识别“我方”对应的是哪一方以及其称呼，当前需求里暂默认 Party A 为我方
 
-<br />
+而当前代码状态是：
 
-<br />
+* 默认作者使用 `Dacheng`
+* `my_country` 目前硬编码为 `Philippines`
+* 没有真正识别 Party A / Client / 其他称呼
 
-### 2.3 正文部分 (Body) - 核心业务逻辑
+这意味着后续实现时要先解决“主体识别”和“配置来源”问题。
 
-此处采用 **RAG (Retrieval-Augmented Generation)** 思路：先用语义向量召回相关段落，再进行精细规则判断或llm判断。
+## 3. 逐项需求映射
 
-#### **1. 发票条款 (Invoice)**
+### 3.1 全文识别
 
-- **需求**: 付款方式需明确是“先开发票后付款”。如果没有，需要补充一段话。
-- **检索 Query**: "付款方式", "payment terms", "payment schedule"
-- **判定**:
-  1. 检索 Top-3 相关段落。
-  2. 将段落给llm，让llm判断是否符合需求。
-  3. 若未包含，则视为缺失。
-- **动作**: 在付款条款段落末尾 **插入**: `Party B shall issue a valid and lawful invoice of the corresponding amount to Party A prior to each payment made by Party A.`
+#### 1. 中国电话
 
-#### **2. 退款条款 (Refund)**
+* 需求：识别中国电话并批注 `please confirm`
+* 当前状态：已实现
+* 当前行为：
+  * 在段落中用正则查找中国手机号
+  * 返回审计卡片
+  * 在原段落后追加可见的 `[批注: Please confirm: 中国电话]`
+* 说明：
+  * 当前是规则识别，不依赖语义检索
+  * 当前“批注”不是标准 Word comment
 
-- **需求**: 如果付款方式是预付款，需要说明：若合同解除，对方需退还我方付款但未使用的额度。如果未提及，需要补充一段话。
-- **检索 Query**: "prepayment", "advance payment", "termination refund"
-- **判定**:
-  1. 检索 Top-3 相关段落。
-  2. 将段落给llm，让llm判断是否符合需求。
-  3. 若未包含，则视为缺失。
-- **动作**: 在预付款/终止条款后 **插入**: `Upon expiration or early termination of this Agreement, Party B shall return any unused portion of the prepayment and issue a reverse invoice of the corresponding amount to Party A.`
+#### 2. 126/163 邮箱
 
-#### **3. 银行账户变更 (Bank Account Change)**
+* 需求：识别 126/163 邮箱并批注 `please confirm`
+* 当前状态：已实现
+* 当前行为：
+  * 正则识别邮箱
+  * 生成审计卡片
+  * 插入可见批注文本
 
-- **需求**: 是否有银行账户信息，如果没有需以某种形式标注出来。如果有银行账户信息，需要识别是否有“银行账户信息变更需要双方确认”的表述，如果没有的话，在银行账户信息下面添加一段话。
-- **检索 Query**: "银行账户信息"
-- **判定**:
-  1. 若未检索到银行信息 -> **批注**: `Missing bank account details`。
-  2. 若检索到，让llm检查周围是否有 “银行账户信息变更需要双方确认”的表述。
-- **动作**: 若缺失变更限制，在账户信息后 **插入**: `Any changes to the above bank account shall be subject to the prior written consent by both Parties.`
+#### 3. 邮件与合同一致性
 
-#### **4. 罚息/违约金 (Penalty)**
+* 需求：结合配套邮件检查合同是否完整覆盖
+* 当前状态：未实现
+* 当前缺口：
+  * 没有邮件输入接口
+  * 没有合同与邮件的对齐逻辑
+  * 没有缺失内容的结构化输出
 
-- **需求**: 检测是否有延期付款违约金/罚息相关内容。
-- **检索 Query**: "late payment penalty", "interest on overdue payment", "default interest"
-- **判定**: 相关度前3。
-- **动作**: 标注出来，`Please check`。
+### 3.2 文首 / 文末
 
-#### **5. 争议解决 (Dispute Resolution)**
+#### 1. 代表人/权签人为中国人姓名
 
-- **需求**: 规定法律适用（我方所在地）及管辖法院（我方所在地）。
-- **检索 Query**: "governing law", "dispute resolution", "jurisdiction", "arbitration"
-- **判定**:
-  1. 若无此条款 -> 在文末或通用条款处新增。
-  2. 若有但内容不符（如适用他国法律） -> 替换。
-- **动作**: **替换/新增**: `This Agreement shall be governed by and construed in accordance with the laws of [My Country]. Any dispute arising out of or in connection with this Agreement shall be submitted to the exclusive jurisdiction of the competent courts located in the jurisdiction of Party A.`
+* 需求：如果是中国人姓名，批注 `please confirm`
+* 当前状态：未实现
+* 当前缺口：
+  * 没有签字区语义定位
+  * 没有姓名国别判断
 
-#### **6. 代扣税 (Withholding Tax)**
+#### 2. 缺少职位信息
 
-- **需求**: 若双方地址在 菲律宾/巴基斯坦/墨西哥/香港/印度尼西亚，付款条款相关内容下面添加代扣税条款。
-- **前置检查**: 扫描找到文首/文末地址信息，使用llm判断国家/地区。识别付款条款的位置
-- **检索 Query**: "付款条款"
-- **动作**: 若满足地域条件，在付款条款后 **插入**: `The withholding tax arising under this Agreement shall be withheld and remitted to the government authorities by Party A in accordance with applicable tax laws and regulations/ in the following month with a valid TDS Certificate provided.`
+* 需求：若没有 `title` 或 `herein represented by` 等职位信息，批注 `please clarify`
+* 当前状态：部分实现
+* 当前行为：
+  * 只对全文尾部 500 字做简单文本检查
+  * 如果没有 `Position` 或 `Title` 就给出警告卡片
+* 当前缺口：
+  * 没有段落级定位
+  * 没有真正判断签字区
+  * 也没有实际插入批注
 
-***
+### 3.3 正文部分
 
-## 3. 代码改造步骤 (Refactoring Steps)
+#### 1. 发票条款
 
-1. **更新** **`WordProcessor`** **初始化**:
-   - 引入 `SemanticSearchEngine` 单例，用于执行段落检索。
-   - 加载 `config` 以获取“我方国家”等配置。
-2. **重构** **`audit_and_fix`**:
-   - **Step 1: 文档切片 (Ingestion)**: 使用 `DocProcessor` 将文档切分为段落级 Chunks。
-   - **Step 2: 向量化 (Embedding)**: 调用 `SemanticSearchEngine.load_document` 对当前文档进行临时索引。
-   - **Step 3: 语义审计 (Semantic Audit)**:
-     - 针对每个需求点（Invoice, Refund, Penalty...），构造 Query 进行 `engine.search`。
-     - 获取 Top-K 段落及其索引（`original_index`）。
-     - 在 `WordProcessor` 中根据索引定位 `doc.paragraphs` 中的具体段落对象。
-   - **Step 4: 执行修订**:
-     - 使用 `TrackChangesHelper` 对定位到的段落执行 Insert/Delete/Comment 操作。
-3. **优化** **`TrackChangesHelper`**:
-   - 确保所有操作默认作者为 `"Dacheng"`。
-   - 增强 `add_comment` 的稳健性。
+* 需求：如果是预付款/后付款，应检查是否为先票后款，不满足则补充发票语句
+* 当前状态：部分实现
+* 当前行为：
+  * 只要全文出现 `invoice` 且未出现目标语句，就在包含 `payment` 的段落后追加固定句子
+* 当前缺口：
+  * 没有识别“预付款/每月后付款”的条件
+  * 没有语义定位真正的付款条款
 
+#### 2. 退款条款
 
+* 需求：预付款场景下，若终止后未使用额度退款条款缺失，则补充
+* 当前状态：未实现
 
+#### 3. 银行账户变更
+
+* 需求：识别银行账户信息，以及“账户变更需双方确认”的表述
+* 当前状态：未实现
+
+#### 4. 延期付款违约金 / 罚息
+
+* 需求：识别到则删除
+* 当前状态：部分实现
+* 当前行为：
+  * 删除包含 `late payment penalty` 或 `penalty interest` 的段落文本
+* 当前缺口：
+  * 模式较窄
+  * 没有语义检索和更多变体表达
+
+#### 5. 争议解决
+
+* 需求：若无条款则新增；若不符合我方所在地要求则替换
+* 当前状态：部分实现
+* 当前行为：
+  * 仅在存在 `DISPUTE RESOLUTION` 字样的段落时执行整段替换
+  * 我方国家当前固定写为 `Philippines`
+* 当前缺口：
+  * 条款不存在时不会新增
+  * 没有“我方所在地”自动识别
+  * 替换条件比较粗
+
+#### 6. 代扣税
+
+* 需求：在菲律宾/巴基斯坦/墨西哥/香港/印尼等场景下补充代扣税条款
+* 当前状态：未实现
+
+## 4. 当前代码能力边界
+
+当前最容易被误解的一点是：**搜索引擎已经存在，不等于审计已经语义化。**
+
+当前代码中：
+
+* `SemanticSearchEngine` 已实现
+* `DocProcessor` 已实现
+* 但 `WordProcessor.audit_and_fix` 并未调用这些能力
+
+所以现阶段文档应把“语义审计”视为下一阶段工作，而不是当前现状。
+
+## 5. 后续实现建议
+
+建议按下面顺序推进：
+
+1. 先解决基础配置问题
+   * 统一批注作者大小写
+   * 明确 `my_country` 来源
+   * 明确“我方”识别策略
+2. 再接入语义召回主链路
+3. 再补齐正文重点条款
+4. 最后处理邮件一致性和 LLM 判断
+
+## 6. 文档维护约定
+
+后续如果某项需求已经真正接入主审计链路，请把状态从：
+
+* 未实现
+* 部分实现
+* 已实现
+
+同步更新，不要只在任务列表中改勾选状态。

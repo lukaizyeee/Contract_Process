@@ -1,34 +1,44 @@
-# AI 工作指引：项目文档阅读规范
+# AI 工作指引
 
-为了确保你对项目架构有准确的理解，避免重复造轮子或破坏现有的设计模式，在开始任何代码编写或任务执行前，请务必遵循以下**文档阅读规范**：
+为了避免误读仓库状态或把规划内容当成现状，在执行任何代码修改前，请按以下顺序建立上下文。
 
-## 1. 核心必读 (Mandatory)
+## 1. 必读顺序
 
-在执行任何涉及代码修改的任务前，**必须首先阅读**以下文档：
+1. 先读 [doc/project_structure.md](/Users/aizyeee/ZZH/dentons_work/code/doc/project_structure.md)
+   * 这是当前仓库现状的主文档
+   * 用来确认模块职责边界和当前主数据流
+2. 如果任务与业务规则相关，再读 [doc/audit_implementation_plan.md](/Users/aizyeee/ZZH/dentons_work/code/doc/audit_implementation_plan.md)
+   * 注意区分“已实现 / 部分实现 / 未实现”
+3. 如果任务涉及长期方向或大改动，再读 [doc/master_plan.md](/Users/aizyeee/ZZH/dentons_work/code/doc/master_plan.md)
+4. 如果任务涉及实施路径或接口层落地，再读 [doc/implementation_plan.md](/Users/aizyeee/ZZH/dentons_work/code/doc/implementation_plan.md)
+5. 如果任务涉及优先级或现有缺口，再读 [doc/tasks.md](/Users/aizyeee/ZZH/dentons_work/code/doc/tasks.md)
 
-*   **`code/project_structure.md` (项目结构与功能指南)**
-    *   **用途**：这是项目的“地图”和“宪法”。它定义了每个文件的职责边界、模块间的数据流向以及绝对禁止的“反模式”（如重复加载 AI 模型）。
-    *   **行动**：请先阅读此文件，确认你要修改的功能属于哪个模块（`web_server` vs `api_interface` vs `core/*`），并检查你的实现方案是否违背了“开发防坑指南”。
+## 2. 需求源优先级
 
-## 2. 任务相关选读 (Context-Dependent)
+与合同审计业务直接相关的最终需求源，优先参考：
 
-根据用户请求的具体类型，按需阅读以下文档：
+* [needs-260211.txt](/Users/aizyeee/ZZH/dentons_work/code/needs-260211.txt)
 
-*   **如果涉及新功能开发或架构调整**：
-    *   阅读 **`code/master_plan.md`**：了解项目的宏观愿景、核心价值和未来路线图，确保新功能符合产品方向。
-    *   阅读 **`code/implementation_plan.md`**：获取详细的技术栈选型、API 接口定义和并发安全规范。
-
-*   **如果涉及具体的合同审计业务逻辑**：
-    *   阅读 **`code/audit_implementation_plan.md`**：这是针对合同审计需求的详细拆解，包含了具体的正则规则、RAG 检索策略和修订动作定义。
-
-*   **如果涉及进度查询或任务管理**：
-    *   阅读 **`code/tasks.md`**：查看当前已完成的任务和待办事项，避免重复执行已完成的工作。
+如果文档与需求源冲突，应以需求源和当前代码真实行为为准，并同步修正文档。
 
 ## 3. 执行原则
 
-1.  **先读后写**：不要假设你知道项目结构。即使是简单的修改，也请先快速浏览 `project_structure.md` 确认模块职责。
-2.  **引用文档**：在回复用户或编写计划时，明确指出你参考了哪份文档（例如：“根据 `project_structure.md` 的规定，我将把 AI 模型初始化放在 `api_interface.py` 中...”）。
-3.  **更新文档**：如果你对代码架构进行了实质性的变更，务必同步更新对应的文档（尤其是 `project_structure.md`），保持文档与代码的一致性。
+* 先确认“当前代码真实行为”，再写方案
+* 不要把未来规划写成当前能力
+* 如果修改了模块职责、数据流或任务状态，要同步更新文档
+* 如果引入了语义审计能力，要明确它接入的是：
+  * 独立检索接口
+  * 还是主审计链路
 
----
-*请将此提示词作为你的系统指令或工作习惯的一部分，时刻保持对项目上下文的敏感度。*
+## 4. 当前容易误判的点
+
+* 搜索引擎已经实现，但主审计流程还没有完成语义化
+* 当前“批注”主要是可见文本插入，不是完整 Word comment
+* 当前签字区、退款、银行账户、代扣税等核心需求尚未完成
+
+## 5. 回答或规划时建议显式说明
+
+建议在回复中主动说明你参考了哪些文件，例如：
+
+* “根据 `project_structure.md`，主审计链路仍然在 `WordProcessor` 中。”
+* “根据 `audit_implementation_plan.md` 与 `needs-260211.txt`，退款条款仍未实现。”

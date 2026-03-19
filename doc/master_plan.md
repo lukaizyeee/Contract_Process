@@ -1,44 +1,80 @@
-# Master Plan: Local Legal Contract Semantic Search Backend (Web Version)
+# 项目总览
 
-## 1. Project Vision (项目愿景)
+## 1. 项目目标
 
-本项目的核心目标是构建一个**本地化、高精度、跨语言**的英文法律合同中文语义检索与审计系统（v1.0）。
-系统采用 **B/S (Browser/Server)** 架构，部署在局域网高性能服务器（如 Mac Mini）上，用户通过浏览器即可访问。旨在通过中文意图精准定位英文条款，并提供智能化的合规审计建议，大幅提高法律专业人士的审查效率。
+本项目的目标是构建一个**本地部署、支持英文合同审计、可逐步升级到语义检索与智能审查**的 Web 系统。
 
-## 2. Core Value Proposition (核心价值)
+理想状态下，系统应支持：
 
-* **Privacy First (隐私优先)**: 零数据外流，所有计算（文档解析、AI 推理）完全在本地局域网服务器完成，确保法律文档的安全。
-* **Zero Client Installation (零安装)**: 采用 Web 架构，客户端无需安装任何软件或环境，只要有浏览器即可使用，兼容 Windows/Mac/Mobile。
-* **High Performance Sharing (资源共享)**: 集中利用服务器的 GPU/MPS 加速能力，支持多用户并发审计，降低用户端硬件门槛。
-* **Cross-Lingual (跨语言)**: 原生支持中文查询搜英文文档，无需中间翻译层，避免语义损耗。
+* 中文或业务意图驱动的英文合同定位
+* 本地隐私保护
+* 局域网共享部署
+* 审计结果可视化和修订版导出
+* 后续接入本地 LLM 做增强判断
 
-## 3. Technical Constraints & Requirements (关键约束)
+## 2. 当前仓库状态
 
-* **Architecture**: Browser/Server (B/S).
-* **Server Platform**: macOS (Apple Silicon/Metal) priority; Linux/Windows compatible.
-* **Concurrency**: 支持小规模（~5-10人）并发使用，需处理好文件隔离与线程阻塞问题。
-* **Hardware**: 服务器需具备足够的 RAM (16GB+) 和加速卡 (MPS/CUDA) 以运行 Embedding 模型。
-* **Input Format**: Word Documents (`.docx`).
+当前仓库已经完成的是：
 
-## 4. Architecture Overview (架构概览)
+* 从桌面端迁移到 Web 架构
+* `.docx` 上传、处理、下载闭环
+* 基于 OpenXML 的修订模式输出
+* HTML 预览和前端联动
+* 独立的语义检索引擎实现
 
-系统由以下核心模块组成：
+当前仓库**尚未完成**的是：
 
-1. **Web Server Layer (Web 服务层)**
-    * `web_server.py`: 基于 `FastAPI` + `Uvicorn` 的高性能异步 Web 服务器。
-    * 负责静态资源托管 (`index.html`)、API 路由分发、请求上下文管理。
-    * **并发控制**: 使用 `ThreadPoolExecutor` 将 CPU 密集型任务卸载到线程池。
+* 将语义检索能力真正接入主审计链路
+* 根据 [needs-260211.txt](../needs-260211.txt) 完整实现全部审计规则
+* 用户鉴权、历史记录、多文档对比
+* 本地 LLM 推理与问答
 
-2. **Core Processing Layer (核心处理层)**
-    * `core/ingestion.py`: `.docx` 解析与切片。
-    * `core/word_processor.py`: 基于 XML 注入的文档审计与修订引擎（去 Word 依赖）。
-    * `core/preview_generator.py`: 生成带修订痕迹的高保真 HTML 预览。
+因此，更准确地说，当前代码库处于：
 
-3. **Retrieval Engine Layer (检索引擎层)**
-    * `core/search_engine.py`: 核心双层检索逻辑 (`bge-m3` + `bge-reranker-large`)。
+* “Web 化已完成”
+* “规则审计可运行”
+* “语义检索能力已准备好，但尚未与主流程融合”
 
-## 5. Future Roadmap (未来规划)
+## 3. 核心价值
 
-* **v1.0 (Current)**: Web 化架构重构完成。支持文件上传、在线预览、智能审计、修订下载。支持局域网并发访问。
-* **v1.x**: 增加用户鉴权 (Login)、审计历史记录 (History)、多文档对比。
-* **v2.0**: 引入本地 LLM (Ollama) 进行增强问答与条款生成 (RAG)，实现“针对本合同的 AI 助手”。
+* **Privacy First**：合同内容尽量只在本地或局域网内处理
+* **Zero Client Installation**：客户端只需要浏览器
+* **Resource Sharing**：通过单台高性能机器共享模型推理能力
+* **Progressive Intelligence**：先用稳定的规则审计打底，再逐步接入语义检索与 LLM
+
+## 4. 技术约束
+
+* 架构：B/S
+* 输入格式：`.docx`
+* 主要运行环境：macOS Apple Silicon 优先，其次 Linux/Windows
+* 并发规模：当前目标仍是小规模并发
+* 模型依赖：`bge-m3` 和 `bge-reranker-large`
+
+## 5. 阶段划分
+
+### 当前阶段
+
+* Web 服务稳定运行
+* 规则审计可演示
+* 修订版和 HTML 预览链路已打通
+
+### 下一阶段
+
+* 以 [needs-260211.txt](../needs-260211.txt) 为核心，补齐正文与文首文末审计点
+* 将 `DocProcessor + SemanticSearchEngine` 接入主审计流程
+* 区分“规则命中”“语义召回”“LLM 判断”三类审计来源
+
+### 后续阶段
+
+* 接入本地 LLM
+* 支持审计历史、用户体系、多文档能力
+
+## 6. 对后续开发的建议
+
+后续工作不应再把“规则审计”和“语义审计”混写成一个概念。更建议分成三层：
+
+1. 确定性规则
+2. 语义召回与定位
+3. LLM 判断与生成
+
+这样文档、代码和测试都会更容易对齐。

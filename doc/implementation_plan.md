@@ -1,73 +1,108 @@
-# 实施计划：Web 版法律合同智能审计系统
+# 实施计划
 
-## 1. 技术栈 (Tech Stack)
+本文档描述的是**更贴近当前代码状态的实施方案**，并明确后续扩展应从哪里继续推进。
 
-| 组件 | 选型 | 说明 |
+## 1. 当前技术栈
+
+| 组件 | 当前选型 | 状态 |
 | :--- | :--- | :--- |
-| **Web 框架** | `FastAPI` | 高性能、异步、易于部署 |
-| **应用服务器** | `Uvicorn` | ASGI 服务器，生产级标准 |
-| **前端技术** | HTML5 / JS (Vanilla) | 轻量级、零构建、易于嵌入 |
-| **文档解析** | `python-docx` | 核心 `.docx` 解析与修改 |
-| **AI 模型** | `BAAI/bge-m3` | Embedding (语义召回) |
-| **AI 模型** | `BAAI/bge-reranker-large` | Reranker (精准重排) |
-| **并发控制** | `ThreadPoolExecutor` | 处理 CPU 密集型任务 |
-| **文件管理** | `pathlib` + `tempfile` | 跨平台路径与临时文件隔离 |
+| Web 框架 | `FastAPI` | 已使用 |
+| 应用服务器 | `Uvicorn` | 已使用 |
+| 前端 | HTML + 原生 JS | 已使用 |
+| 文档解析 | `python-docx` | 已使用 |
+| 修订写入 | OpenXML 注入 | 已使用 |
+| 语义召回 | `BAAI/bge-m3` | 已实现，未接入主审计链路 |
+| 重排 | `BAAI/bge-reranker-large` | 已实现，未接入主审计链路 |
+| 并发控制 | `ThreadPoolExecutor` | 已使用 |
 
-## 2. 详细模块设计 (Detailed Module Design)
+## 2. 当前实现结构
 
-### 2.1 Web 服务层 (`web_server.py`)
+### 2.1 Web 服务层
 
-* **职责**: 系统的统一入口，处理 HTTP 请求。
-* **API 接口**:
-  * `GET /`: 返回前端单页应用 (`templates/index.html`)。
-  * `POST /api/audit`:
-    * 接收 `UploadFile`。
-    * 创建独立的 `UUID` 临时目录。
-    * 将任务提交给 `ThreadPoolExecutor`。
-    * 返回审计结果 JSON（含预览 HTML 和下载链接）。
-  * `GET /api/download/{request_id}/{filename}`:
-    * 安全校验路径。
-    * 返回 `FileResponse` 供用户下载。
-* **中间件**: 配置 CORS 以允许灵活的网络访问。
+当前 [web_server.py](/Users/aizyeee/ZZH/dentons_work/code/web_server.py) 已经实现：
 
-### 2.2 核心业务层 (`api_interface.py`)
+* `GET /`
+* `GET /api/status`
+* `POST /api/audit`
+* `GET /api/download/{request_id}/{filename}`
 
-* **职责**: 编排文档处理流程，连接 Core 模块与 Web 层。
-* **关键重构**:
-  * `audit_and_prepare_contract(file_path)`:
-    * 修改了文件输出路径逻辑，不再依赖原文件目录，而是自动识别输入文件所在的临时目录。
-    * 确保在多线程环境下，每个任务操作的是自己沙箱内的文件。
+当前做法：
 
-### 2.3 前端交互层 (`templates/index.html`)
+* 启动时异步初始化搜索引擎
+* 请求到来后将上传文件写入请求级目录
+* 在线程池中执行同步审计
+* 返回结构化 JSON 给前端
 
-* **设计风格**: 复刻原 Qt 版本的 macOS 风格，简洁专业。
-* **关键交互**:
-  * **异步上传**: 使用 `fetch` API 上传文件，显示全屏 Loading 遮罩。
-  * **HTML 渲染**: 接收后端返回的 `preview_html`，直接渲染高保真文档。
-  * **卡片联动**: 点击右侧审计卡片，左侧文档视图自动平滑滚动 (`scrollIntoView`) 并高亮显示。
-  * **动态下载**: 审计成功后，动态显示下载按钮。
+当前缺口：
 
-### 2.4 核心处理模块 (`core/`)
+* 没有后台清理任务，临时目录可能持续堆积
+* CORS 中间件仅在 `__main__` 启动路径中添加
+* 缺少更细粒度的错误分类和日志结构
 
-* **`core/word_processor.py`**:
-  * 全平台统一使用 **XML 注入** 技术实现“修订模式”。
-  * 移除了所有 Windows COM / AppleScript 依赖，实现纯 Python 运行。
-* **`core/preview_generator.py`**:
-  * 自研 XML -> HTML 解析器，支持 `<ins>`/`<del>` 标签渲染，完美还原修订痕迹。
+### 2.2 编排层
 
-## 3. 开发规范 (Development Guidelines)
+当前 [api_interface.py](/Users/aizyeee/ZZH/dentons_work/code/api_interface.py) 的主流程是：
 
-1. **并发安全**:
-    * 严禁使用全局变量存储请求相关的状态。
-    * 文件操作必须在 `request_id` 隔离的目录下进行。
-2. **资源管理**:
-    * `web_server.py` 需配置全局临时目录清理策略（目前为请求级清理或保留供下载，需注意磁盘占用）。
-    * AI 模型在 `startup` 事件中预加载。
-3. **错误处理**:
-    * API 层需捕获所有异常并返回标准的 HTTP 500 错误及详细信息，便于前端展示。
+1. 计算修订版输出路径
+2. 调用 `WordProcessor.audit_and_fix`
+3. 调用 `DocxPreviewGenerator.generate_html`
+4. 向 HTML 注入跳转锚点
+5. 返回审计结果和预览内容
 
-## 4. 部署策略
+当前缺口：
 
-1. **服务器**: 推荐 Mac Mini (M1/M2) 或高性能 Linux 服务器。
-2. **网络**: 确保服务器 IP 固定，或在局域网内通过 Hostname 访问。
-3. **运行**: 使用 `python web_server.py` 直接启动，或配合 `Process Monitor` (如 Supervisor) 守护进程。
+* 搜索引擎虽已初始化，但主流程未装载文档向量
+* `process_file_for_search` 和 `search_query` 还停留在备用接口状态
+
+### 2.3 前端
+
+当前 [templates/index.html](/Users/aizyeee/ZZH/dentons_work/code/templates/index.html) 是单文件 SPA，已实现：
+
+* 上传 `.docx`
+* 模型状态展示
+* Loading 遮罩
+* 审计分类展示
+* 卡片跳转高亮
+* 修订版下载
+
+当前缺口：
+
+* 无移动端特别适配
+* 大文档渲染可能有性能问题
+* 没有更细的错误 UI
+
+### 2.4 核心处理
+
+当前 [core/word_processor.py](/Users/aizyeee/ZZH/dentons_work/code/core/word_processor.py) 是审计主链路核心。
+
+实现特点：
+
+* 使用 `python-docx` 读写文档
+* 通过 OpenXML 注入 `<w:ins>` / `<w:del>`
+* 当前“批注”使用可见文本插入兜底，不是完整 Word comment 对象
+
+## 3. 下一步实施重点
+
+以 [needs-260211.txt](../needs-260211.txt) 为准，建议按下面顺序推进：
+
+1. 校准基础语义和配置
+   * 批注作者大小写是否严格使用 `dacheng`
+   * 我方身份识别与称呼抽取
+2. 接入语义审计主链路
+   * `DocProcessor.process`
+   * `SemanticSearchEngine.load_document`
+   * 按审计点构造查询并定位段落
+3. 补齐正文核心条款
+   * 退款
+   * 银行账户变更
+   * 代扣税
+4. 补齐文首文末审计
+   * 中国人姓名识别
+   * Title/represented by 检查
+5. 最后再接 LLM
+
+## 4. 工程建议
+
+* 在实现语义审计前先补自动化测试样本
+* 将审计结果增加 `source` 字段，例如 `rule`、`semantic`、`llm`
+* 将“需求映射表”和“测试样本”绑定，避免文档和实现再次漂移
